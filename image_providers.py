@@ -411,6 +411,12 @@ def _prov_aihorde(query: str, count: int, style: Optional[dict] = None) -> list:
                 log.warning("[aihorde] done=true mas sem generations")
                 return []
 
+            # Descarta geração censurada pelo filtro NSFW (AI Horde devolve um cartão
+            # "CENSORED / potentially spam content blocked" que passaria no filtro de tamanho).
+            if generations[0].get("censored"):
+                log.warning("[aihorde] geração censurada (filtro NSFW) — descartando placeholder.")
+                return []
+
             img_data = generations[0].get("img", "")
             if not img_data:
                 log.warning("[aihorde] Campo img vazio")
