@@ -818,14 +818,15 @@ def _lane_for(vctx: Optional[dict]) -> str:
 
     vctx é o visual_context do roteiro; pode ser None.
     """
+    # Modo cinematográfico (IA) tem PRECEDÊNCIA: gera imagens coesas a partir do
+    # visual_context em vez de banco genérico. Ligado por IMG_STYLE=cinematic.
+    # (Vem antes de IMG_LANE pra não ser sobreposto pelo IMG_LANE=burn do .env.)
+    if os.environ.get("IMG_STYLE", "").strip().lower() == "cinematic":
+        return "generate"
+
     env_lane = os.environ.get("IMG_LANE", "").strip().lower()
     if env_lane in ("burn", "generate", "anime", "ref"):
         return env_lane
-
-    # Modo cinematográfico (IA): gera imagens coesas a partir do visual_context
-    # em vez de buscar banco genérico. Ligado por IMG_STYLE=cinematic no .env.
-    if os.environ.get("IMG_STYLE", "").strip().lower() == "cinematic":
-        return "generate"
 
     if vctx:
         subject_mode = (vctx.get("subject_mode") or "").lower()
