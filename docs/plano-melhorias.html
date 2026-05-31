@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a2e; line-height: 1.5; font-size: 12px; }
+  h1 { color: #0f3460; font-size: 26px; margin: 0 0 4px; }
+  h2 { color: #0f3460; font-size: 17px; margin: 22px 0 8px; border-bottom: 2px solid #16c79a; padding-bottom: 4px; }
+  h3 { color: #16213e; font-size: 14px; margin: 14px 0 6px; }
+  .sub { color: #666; font-size: 12px; margin-bottom: 2px; }
+  .tag { display:inline-block; background:#16c79a; color:#fff; padding:2px 9px; border-radius:10px; font-size:10px; font-weight:bold; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 11px; }
+  th { background: #0f3460; color: #fff; text-align: left; padding: 6px 8px; }
+  td { border-bottom: 1px solid #ddd; padding: 6px 8px; vertical-align: top; }
+  tr:nth-child(even) td { background: #f5f7fa; }
+  .free { color: #16a34a; font-weight: bold; }
+  .paid { color: #d97706; font-weight: bold; }
+  .box { background:#f0f9f6; border-left:4px solid #16c79a; padding:8px 12px; margin:10px 0; border-radius:0 6px 6px 0; }
+  .warn { background:#fff7ed; border-left:4px solid #d97706; padding:8px 12px; margin:10px 0; border-radius:0 6px 6px 0; }
+  .rec { background:#eff6ff; border-left:4px solid #2563eb; padding:8px 12px; margin:10px 0; border-radius:0 6px 6px 0; }
+  ul { margin: 4px 0 10px; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .small { font-size: 10px; color: #888; }
+  .check { color:#16a34a; } .x { color:#dc2626; }
+  .price { font-weight:bold; color:#0f3460; }
+</style>
+</head>
+<body>
+
+<h1>🎬 Canal Dark — Plano de Melhorias & Próximos Passos</h1>
+<div class="sub">Projeto pessoal do Vinicius Zenatti · Shorts narrados faceless (true crime / mistérios / One Piece)</div>
+<div class="sub">Atualizado em 30/05/2026 · Câmbio de referência: ~R$ 5,40/US$ (flutua)</div>
+
+<div class="box">
+<b>Onde estamos hoje (tudo grátis e funcionando):</b> roteiro escrito pelo Claude (sem cota/limite) → voz de IA (Edge-TTS) → b-roll de banco (Pexels) → legenda + montagem 9:16 (FFmpeg, local) → entrega pelo bot do Telegram. <b>Custo atual: R$ 0/mês.</b> Falta: publicar automático (Postiz + contas) e rodar 24/7 sem o PC ligado.
+</div>
+
+<h2>1. Onde o plano gratuito ainda aperta (limitações reais)</h2>
+<table>
+<tr><th>Etapa</th><th>Hoje (grátis)</th><th>Limitação honesta</th></tr>
+<tr><td>Roteiro</td><td>Claude (eu) escrevo</td><td>Depende de mim no loop. 100% automático sozinho usaria Gemini/Groq (cota diária).</td></tr>
+<tr><td>Voz</td><td>Edge-TTS</td><td>Boa, mas soa "robô" em frases longas; entonação limitada.</td></tr>
+<tr><td>Imagem/B-roll</td><td>Pexels (vídeo de banco)</td><td>Genérico e repetido. Não gera cenas específicas (ex: o personagem/caso exato). IA de imagem grátis (Pollinations/Gemini) caiu/virou paga.</td></tr>
+<tr><td>Montagem</td><td>FFmpeg local</td><td>Roda só com o PC ligado. Sem efeitos avançados (face-tracking, transições ricas).</td></tr>
+<tr><td>Publicação</td><td>— (manual)</td><td>Ainda não posta sozinho. Falta Postiz + contas conectadas.</td></tr>
+<tr><td>Operação 24/7</td><td>— (PC)</td><td>Bot morre se o PC desligar/dormir. Sem servidor.</td></tr>
+</table>
+
+<h2>2. Melhorias GRÁTIS (fazer primeiro — custo R$ 0)</h2>
+<table>
+<tr><th>#</th><th>Melhoria</th><th>Ganho</th><th>Esforço</th></tr>
+<tr><td>1</td><td><b>Roteirista em cascata</b> (Gemini → Groq → Cerebras)</td><td>~5.000 roteiros/dia grátis somados; acaba o erro 429</td><td>Médio</td></tr>
+<tr><td>2</td><td><b>Publicação via Postiz</b> self-hosted + contas</td><td>Posta em YouTube/TikTok/Reels sozinho</td><td>Alto</td></tr>
+<tr><td>3</td><td><b>Trilha sonora</b> de tensão (biblioteca livre do YouTube)</td><td>Retenção maior; clima de true crime</td><td>Baixo</td></tr>
+<tr><td>4</td><td><b>Banco de b-roll por nicho</b> (reusar clipes bons já baixados)</td><td>Menos genérico, mais rápido</td><td>Médio</td></tr>
+<tr><td>5</td><td><b>Guardrail + 2 checkpoints</b> no Telegram (aprovar roteiro/risco)</td><td>Qualidade e segurança antes de postar</td><td>Médio</td></tr>
+<tr><td>6</td><td><b>Validar nicho</b>: postar 10-15 vídeos e medir engajamento</td><td>Saber se vale escalar ANTES de gastar</td><td>Baixo (mas leva tempo)</td></tr>
+</table>
+<div class="rec"><b>Recomendação:</b> fazer 1, 3, 5 e 6 antes de gastar qualquer real. São o maior ganho por R$ 0.</div>
+
+<h2>3. Gastos que VALEM a pena (quando crescer) — preços reais 2026</h2>
+<table>
+<tr><th>Investimento</th><th>Custo</th><th>O que resolve</th><th>Quando vale</th></tr>
+<tr><td><b>ElevenLabs Starter</b><br><span class="small">voz de IA premium</span></td><td class="price">US$ 5/mês<br>(~R$ 27)</td><td>Voz MUITO mais natural e emotiva = retenção. 30 mil caracteres/mês (~30-40 shorts).</td><td>Assim que um nicho começar a engajar</td></tr>
+<tr><td><b>Servidor Hetzner CPX</b><br><span class="small">rodar 24/7</span></td><td class="price">€ 6-8/mês<br>(~R$ 35-47)</td><td>Pipeline ligado sem o PC; posta de madrugada sozinho.</td><td>Quando postar TODO dia</td></tr>
+<tr><td><b>Imagem por IA (Gemini billing)</b><br><span class="small">cenas específicas</span></td><td class="price">~US$ 0,02-0,04<br>por imagem</td><td>B-roll sob medida (não genérico). ~R$ 0,60-1,20 por vídeo de 8 cenas.</td><td>Quando o b-roll de banco limitar o nicho</td></tr>
+<tr><td><b>GPU em nuvem (RunPod)</b><br><span class="small">vídeo/imagem IA sem filtro</span></td><td class="price">US$ 0,22-0,34/h<br>(RTX 3090/4090)</td><td>Stable Diffusion/LTX próprios: estilo anime fiel (ex: One Piece), vídeo IA. Paga só ligado.</td><td>Só se for fundo IA pesado / One Piece visual</td></tr>
+<tr><td><b>ElevenLabs Creator</b><br><span class="small">escala de voz</span></td><td class="price">US$ 22/mês<br>(~R$ 119)</td><td>100 mil caracteres + clonagem de voz (persona própria do canal).</td><td>Vários canais / volume alto</td></tr>
+</table>
+
+<h2>4. Cenários (do mais enxuto ao mais robusto)</h2>
+
+<h3><span class="tag">CENÁRIO A</span> &nbsp; Validação — R$ 0/mês</h3>
+<ul>
+<li>Tudo como está: Claude escreve roteiro, Edge-TTS, Pexels, montagem no PC, posto manual.</li>
+<li><b>Objetivo:</b> publicar 10-15 vídeos, ver o que engaja. <b>Custo: zero.</b></li>
+<li><span class="check">✔</span> Ideal AGORA — não gasta nada antes de saber se o canal cola.</li>
+</ul>
+
+<h3><span class="tag">CENÁRIO B</span> &nbsp; Semi-pro — ~R$ 27/mês</h3>
+<ul>
+<li>Cenário A + <b>ElevenLabs Starter</b> (voz natural) + cascata de roteiro grátis.</li>
+<li><b>Objetivo:</b> qualidade de áudio que retém; produção consistente.</li>
+<li><span class="check">✔</span> Melhor relação ganho/custo quando 1 nicho mostrar tração.</li>
+</ul>
+
+<h3><span class="tag">CENÁRIO C</span> &nbsp; Automático 24/7 — ~R$ 60-75/mês</h3>
+<ul>
+<li>Cenário B + <b>Hetzner</b> (servidor 24/7) + <b>Postiz</b> (publicação automática).</li>
+<li><b>Objetivo:</b> 1 short/dia postado sozinho em 3 plataformas, sem o PC.</li>
+<li><span class="check">✔</span> Quando você já posta diário e quer escalar sem esforço manual.</li>
+</ul>
+
+<h3><span class="tag">CENÁRIO D</span> &nbsp; Visual IA / multi-canal — ~R$ 150-300+/mês</h3>
+<ul>
+<li>Cenário C + <b>imagem por IA</b> (Gemini billing) e/ou <b>GPU RunPod</b> (anime fiel, vídeo IA) + <b>ElevenLabs Creator</b>.</li>
+<li><b>Objetivo:</b> visual sob medida (One Piece estilo anime), múltiplos canais, persona de voz própria.</li>
+<li><span class="x">✘</span> NÃO comece por aqui. Só faz sentido com canal já validado e gerando retorno.</li>
+</ul>
+
+<div class="warn">
+<b>Aviso honesto (sem rodeio):</b> o gargalo do projeto NÃO é tecnologia — é <b>nicho + qualidade de roteiro + validação</b>. Gastar em servidor/voz/IA antes de provar que o conteúdo engaja é colocar dinheiro no lugar errado. A ordem certa é: <b>A → (validou?) → B → (posta diário?) → C → (escalando?) → D.</b>
+</div>
+
+<h2>5. Próximos passos recomendados (ordem)</h2>
+<table>
+<tr><th>Ordem</th><th>Ação</th><th>Cenário</th><th>Custo</th></tr>
+<tr><td>1</td><td>Escolher 1 nicho-foco e produzir 10-15 roteiros comigo</td><td>A</td><td class="free">R$ 0</td></tr>
+<tr><td>2</td><td>Implementar cascata de roteiro (Gemini→Groq→Cerebras)</td><td>A</td><td class="free">R$ 0</td></tr>
+<tr><td>3</td><td>Adicionar trilha sonora + banco de b-roll por nicho</td><td>A</td><td class="free">R$ 0</td></tr>
+<tr><td>4</td><td>Subir Postiz + conectar contas; postar manual no início</td><td>A→C</td><td class="free">R$ 0</td></tr>
+<tr><td>5</td><td>Publicar e MEDIR engajamento (10-15 vídeos)</td><td>A</td><td class="free">R$ 0</td></tr>
+<tr><td>6</td><td><b>SE engajou:</b> assinar ElevenLabs Starter (voz)</td><td>B</td><td class="paid">~R$ 27/mês</td></tr>
+<tr><td>7</td><td><b>SE posta diário:</b> Hetzner 24/7 + automação total</td><td>C</td><td class="paid">~R$ 60-75/mês</td></tr>
+<tr><td>8</td><td><b>SE escalando:</b> imagem IA / GPU / multi-canal</td><td>D</td><td class="paid">R$ 150+/mês</td></tr>
+</table>
+
+<div class="small" style="margin-top:18px; border-top:1px solid #ddd; padding-top:6px;">
+Fontes de preço (2026): ElevenLabs (elevenlabs.io/pricing), RunPod (runpod.io/pricing), Hetzner (hetzner.com/cloud). Cotas LLM grátis: Gemini 1.500/dia, Groq ~1.000/dia, Cerebras ~1.700/dia. Documento gerado para uso pessoal do projeto Canal Dark.
+</div>
+
+</body>
+</html>

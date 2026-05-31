@@ -1,0 +1,25 @@
+# Segredos — NUNCA versionar
+.env
+
+# Saída gerada
+out/
+*.mp4
+*.mp3
+*.srt
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# SO / editores
+.DS_Store
+Thumbs.db
+
+# Subprojeto com repositório git próprio (do Caio) — versionado separadamente
+clipradar/
+
+# Segredos/chaves extraídos do chat — LOCAL, NUNCA versionar (texto puro com chaves reais)
+_segredos/
+*.local.md

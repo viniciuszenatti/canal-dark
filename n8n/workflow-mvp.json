@@ -1,0 +1,391 @@
+{
+  "name": "Canal Dark — MVP Shorts Narrados",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Schedule Trigger (08h diário)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        180,
+        300
+      ],
+      "notes": "Dispara o pipeline todo dia às 08h00. Ajuste o fuso horário nas configurações do n8n (TZ=America/Sao_Paulo)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Nó: Ideia via Gemini (Trend Scout) ──────────────────────────────────\n// Chama o Gemini com o prompt de prompts/trend_scout.md para gerar\n// 5 ideias de tópicos para Shorts narrados. Retorna o rank=1.\n//\n// MODO SIMULAÇÃO: o bloco real está comentado abaixo.\n// Para ativar: configure GEMINI_API_KEY nas env vars do n8n e descomente.\n\n// ── Código real (descomente quando o ambiente estiver configurado) ──────────\n// const https = require('https');\n// const apiKey = process.env.GEMINI_API_KEY;\n// if (!apiKey) throw new Error('GEMINI_API_KEY não definida nas env vars do n8n.');\n//\n// const today = new Date().toISOString().split('T')[0];\n// const nichesThisWeek = 'philosophy, history'; // rotacionar semanalmente\n// const coveredTopics = JSON.stringify([]); // TODO: puxar do Google Sheets\n//\n// const systemPrompt = `You are a content strategist... [cole o system prompt do trend_scout.md]`;\n// const userPrompt = `Today is ${today}. Generate 5 original Short ideas...`;\n//\n// const body = JSON.stringify({\n//   contents: [{ parts: [{ text: userPrompt }] }],\n//   systemInstruction: { parts: [{ text: systemPrompt }] }\n// });\n// const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;\n// const response = await $http.request({ method: 'POST', url, body, json: true });\n// const raw = response.candidates[0].content.parts[0].text;\n// const ideas = JSON.parse(raw.replace(/```json\\n?|```/g, '').trim());\n// const best = ideas.find(i => i.rank === 1);\n// return [{ json: { topic: best.topic, hook_angle: best.hook_angle, all_ideas: ideas } }];\n\n// ── MODO SIMULAÇÃO ────────────────────────────────────────────────────────\nconst simulatedIdea = {\n  rank: 1,\n  topic: 'Why the ancient Greeks had no word for blue — and what that means for how we see',\n  hook_angle: 'A color that exists everywhere in nature may not have existed in ancient minds',\n  niche: 'psychology',\n  search_potential: 'high',\n  why_now: 'Linguistic relativity is trending after recent viral posts about perception'\n};\n\nreturn [{ json: { topic: simulatedIdea.topic, hook_angle: simulatedIdea.hook_angle, all_ideas: [simulatedIdea] } }];"
+      },
+      "id": "node-trend-scout",
+      "name": "Code — Ideia via Gemini (Trend Scout)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        300
+      ],
+      "notes": "CONFIGURAR: (1) cole o system prompt completo de prompts/trend_scout.md no código real; (2) defina GEMINI_API_KEY nas env vars; (3) descomente o bloco real e remova a simulação."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Nó: Roteirista via Gemini ─────────────────────────────────────────────\n// Recebe o tópico escolhido e chama o Gemini com o system prompt de\n// prompts/roteirista.md para gerar o roteiro estruturado em JSON.\n//\n// ATENÇÃO: o roteiro gerado aqui vai para o Checkpoint #1 (Telegram).\n// O humano aprova/edita ANTES de entrar no short_factory.\n\n// ── Código real (descomente quando o ambiente estiver configurado) ──────────\n// const apiKey = process.env.GEMINI_API_KEY;\n// if (!apiKey) throw new Error('GEMINI_API_KEY não definida.');\n//\n// const topic = $input.all()[0].json.topic;\n// const systemPrompt = `[cole o system prompt completo de prompts/roteirista.md]`;\n// const userPrompt = `Write a narrated Short script about this topic: \"${topic}\"`;\n//\n// const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;\n// const body = JSON.stringify({\n//   contents: [{ parts: [{ text: userPrompt }] }],\n//   systemInstruction: { parts: [{ text: systemPrompt }] }\n// });\n// const response = await $http.request({ method: 'POST', url, body, json: true });\n// const raw = response.candidates[0].content.parts[0].text;\n// const script = JSON.parse(raw.replace(/```json\\n?|```/g, '').trim());\n// return [{ json: { script, topic } }];\n\n// ── MODO SIMULAÇÃO ────────────────────────────────────────────────────────\nconst topic = $input.all()[0].json.topic;\nconst simulatedScript = {\n  title: 'Why Ancient Greeks Had No Word for Blue',\n  hook: \"The ancient Greeks could see the sky every day — but they had no word for the color blue.\",\n  lines: [\n    { text: \"The ancient Greeks could see the sky every day — but they had no word for the color blue.\", broll_query: \"ancient greek temple acropolis sky\" },\n    { text: \"Homer described the sea as 'wine-dark.' Never blue. [FACT-CHECK]\", broll_query: \"mediterranean sea waves sunset ancient\" },\n    { text: \"Linguist William Gladstone noticed in 1858 that blue appears zero times in the Iliad or Odyssey. [FACT-CHECK]\", broll_query: \"old book library ancient manuscript\" },\n    { text: \"The theory: if a culture has no word for a color, the brain doesn't categorize it as distinct.\", broll_query: \"brain neuroscience concept colorful neurons\" },\n    { text: \"A 2006 study found the Himba tribe in Namibia, who also lack a blue term, struggle to spot blue among green tiles. [FACT-CHECK]\", broll_query: \"africa namibia landscape nature tribe\" },\n    { text: \"Language doesn't just describe reality — it shapes what we're able to perceive.\", broll_query: \"human eye close up vision perception\" },\n    { text: \"Follow for more psychology science that changes how you see the world.\", broll_query: \"colorful abstract mind perception\" }\n  ],\n  cta: \"Follow for more psychology science that changes how you see the world.\",\n  hashtags: [\"#psychology\", \"#ancientgreece\", \"#linguisticrelativity\", \"#history\", \"#mindblown\"]\n};\n\nreturn [{ json: { script: simulatedScript, topic } }];"
+      },
+      "id": "node-scriptwriter",
+      "name": "Code — Roteirista via Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        300
+      ],
+      "notes": "CONFIGURAR: (1) cole o system prompt de prompts/roteirista.md no código real; (2) descomente o bloco real. O roteiro vai para o Telegram antes de entrar no short_factory."
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "telegramApi",
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=📝 *CANAL DARK — Checkpoint #1: Aprovar Roteiro*\n\n📌 *Tópico:* {{ $json.topic }}\n🎬 *Título:* {{ $json.script.title }}\n\n*Hook (primeiros 3s):*\n_{{ $json.script.hook }}_\n\n*Linhas ({{ $json.script.lines.length }}):*\n{{ $json.script.lines.map((l, i) => `${i+1}. ${l.text}`).join('\\n') }}\n\n*CTA:* {{ $json.script.cta }}\n*Hashtags:* {{ $json.script.hashtags.join(' ') }}\n\n---\nO roteiro completo (JSON) foi salvo no diretório de output.\nRevise, edite se necessário, e *responda aqui* ou acesse o n8n para continuar.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node-telegram-checkpoint1",
+      "name": "Telegram — Checkpoint #1: Roteiro",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        840,
+        180
+      ],
+      "notes": "Checkpoint humano #1: envia o roteiro gerado para revisão antes de sintetizar voz e montar o vídeo. CONFIGURAR: crie credencial 'Telegram API' no n8n com TELEGRAM_BOT_TOKEN."
+    },
+    {
+      "parameters": {
+        "amount": 86400,
+        "unit": "seconds"
+      },
+      "id": "node-wait-script-approval",
+      "name": "Wait — Aguarda Aprovação do Roteiro (24h)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        840,
+        320
+      ],
+      "notes": "Pausa o pipeline até que o roteiro seja aprovado. EVOLUIR: substituir por Wait on Webhook que recebe sinal de aprovação/rejeição via botão inline do Telegram ou link de webhook."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Nó: Rodar short_factory.py ───────────────────────────────────────────\n// Recebe o script aprovado e chama short_factory.py via shell.\n// O script salva short.mp4 + metadata.json no out_dir.\n//\n// PRÉ-REQUISITO: o n8n precisa ter acesso ao Python e ao short_factory.py.\n// Monte o volume canal-dark/ no container do n8n.\n// Configure CANAL_DARK_PATH e CANAL_DARK_OUTPUT_DIR nas env vars do n8n.\n\n// ── Código real (descomente quando o ambiente estiver configurado) ──────────\n// const { execSync } = require('child_process');\n//\n// const item = $input.all()[0];\n// const script = item.json.script;\n// const outDir = process.env.CANAL_DARK_OUTPUT_DIR || '/app/canal-dark/out';\n// const factoryPath = process.env.CANAL_DARK_PATH || '/app/canal-dark/short_factory.py';\n// const ttsVoice = process.env.TTS_VOICE || 'en-US-AriaNeural';\n//\n// // Salva o script aprovado em arquivo temporário para passar ao short_factory\n// const scriptFile = `${outDir}/approved_script_${Date.now()}.json`;\n// require('fs').writeFileSync(scriptFile, JSON.stringify(script, null, 2));\n//\n// const cmd = `python \"${factoryPath}\" --script-file \"${scriptFile}\" --out-dir \"${outDir}\" --tts-voice \"${ttsVoice}\"`;\n// const result = execSync(cmd, { env: { ...process.env }, timeout: 600000 });\n// const metadata = JSON.parse(result.toString());\n// return [{ json: { metadata, script, short_path: metadata.short_path } }];\n\n// ── MODO SIMULAÇÃO ────────────────────────────────────────────────────────\nconst item = $input.all()[0];\nconst script = item.json.script;\nconst outDir = process.env.CANAL_DARK_OUTPUT_DIR || '/app/canal-dark/out';\n\nconst simulatedMetadata = {\n  short_path: `${outDir}/short.mp4`,\n  youtube: {\n    title: script.title,\n    description: `${script.hook}\\n\\n${script.cta}\\n\\n${script.hashtags.join(' ')}\\n\\nThis video was created with AI assistance (voice & visuals). #AIContent`,\n    tags: script.hashtags.map(h => h.replace('#', '')),\n    ai_disclosure_required: true\n  },\n  tiktok: { caption: `${script.title} ${script.hashtags.join(' ')}` },\n  instagram: { caption: `${script.title}\\n\\n${script.cta}\\n\\n${script.hashtags.join(' ')}` },\n  script: script\n};\n\nreturn [{ json: { metadata: simulatedMetadata, script, short_path: simulatedMetadata.short_path } }];"
+      },
+      "id": "node-run-short-factory",
+      "name": "Code — Rodar short_factory.py",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        300
+      ],
+      "notes": "CONFIGURAR: (1) monte volume canal-dark/ no container n8n; (2) instale Python + deps no container; (3) defina CANAL_DARK_PATH, CANAL_DARK_OUTPUT_DIR, GEMINI_API_KEY, PEXELS_API_KEY; (4) descomente o execSync real."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Nó: Guardrail via Gemini ─────────────────────────────────────────────\n// Avalia o short gerado antes de publicar.\n// Usa o prompt de prompts/guardrail.md.\n// Retorna { risk_level, needs_human_review, recommendation, ... }\n\n// ── Código real (descomente quando o ambiente estiver configurado) ──────────\n// const apiKey = process.env.GEMINI_API_KEY;\n// if (!apiKey) throw new Error('GEMINI_API_KEY não definida.');\n//\n// const item = $input.all()[0];\n// const { metadata, script, short_path } = item.json;\n//\n// const systemPrompt = `[cole o system prompt completo de prompts/guardrail.md]`;\n// const userPrompt = JSON.stringify({\n//   title: script.title,\n//   hook: script.hook,\n//   cta: script.cta,\n//   hashtags: script.hashtags,\n//   tts_engine: 'edge',\n//   broll_source: 'pexels',\n//   duration: 90,\n//   script_lines: script.lines\n// });\n//\n// const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;\n// const body = JSON.stringify({\n//   contents: [{ parts: [{ text: userPrompt }] }],\n//   systemInstruction: { parts: [{ text: systemPrompt }] }\n// });\n// const response = await $http.request({ method: 'POST', url, body, json: true });\n// const raw = response.candidates[0].content.parts[0].text;\n// const guardrail = JSON.parse(raw.replace(/```json\\n?|```/g, '').trim());\n// return [{ json: { ...item.json, guardrail } }];\n\n// ── MODO SIMULAÇÃO ────────────────────────────────────────────────────────\nconst item = $input.all()[0];\nconst { metadata, script, short_path } = item.json;\n\nconst simulatedGuardrail = {\n  risk_level: 'low',\n  overall_risk_score: 2.5,\n  dimensions: {\n    broll_license_risk: 1,\n    ai_disclosure_needed: 2,\n    hook_strength: 8,\n    subtitle_sync_risk: 2,\n    misinformation_risk: 3,\n    sensitive_topic_risk: 1,\n    platform_policy_risk: 1\n  },\n  reasons: [\n    'Pexels b-roll: license OK for commercial use',\n    'AI disclosure planned (marked in metadata)',\n    'Script contains [FACT-CHECK] items — verify before publishing'\n  ],\n  needs_human_review: false,\n  recommendation: 'publish',\n  suggested_fix: null\n};\n\nreturn [{ json: { metadata, script, short_path, guardrail: simulatedGuardrail } }];"
+      },
+      "id": "node-guardrail",
+      "name": "Code — Guardrail Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        300
+      ],
+      "notes": "EVOLUIR: substituir simulação pela chamada real ao Gemini com o prompt de prompts/guardrail.md. Verifique as dimensões de risco específicas do modelo de Shorts narrados."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-risk-high",
+              "leftValue": "={{ $json.guardrail.needs_human_review }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "node-if-risk",
+      "name": "IF — Risco Alto?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "notes": "Branch TRUE = risco alto/médio → Checkpoint #2 (Telegram + Wait). Branch FALSE = risco baixo → publicar automaticamente via Postiz."
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "telegramApi",
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ *CANAL DARK — Checkpoint #2: Revisar Short*\n\n📹 *Short:* {{ $json.script.title }}\n⚡ *Risco:* {{ $json.guardrail.risk_level }} ({{ $json.guardrail.overall_risk_score }}/10)\n\n*Problemas identificados:*\n{{ $json.guardrail.reasons.join('\\n') }}\n\n*Sugestão:* {{ $json.guardrail.suggested_fix || 'Nenhuma' }}\n\n*Arquivo:* {{ $json.short_path }}\n\nAcesse o n8n para aprovar ou rejeitar.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node-telegram-checkpoint2",
+      "name": "Telegram — Checkpoint #2: Revisar Short",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1720,
+        180
+      ],
+      "notes": "Checkpoint humano #2: enviado apenas quando o Guardrail identifica risco. Inclui detalhes do problema e path do vídeo para revisão."
+    },
+    {
+      "parameters": {
+        "amount": 86400,
+        "unit": "seconds"
+      },
+      "id": "node-wait-short-approval",
+      "name": "Wait — Aguarda Aprovação do Short (24h)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1720,
+        320
+      ],
+      "notes": "Pausa 24h aguardando revisão humana do short com risco identificado. EVOLUIR: usar Wait on Webhook com botões inline no Telegram."
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.POSTIZ_URL }}/api/v1/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.POSTIZ_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  platforms: [\n    {\n      platform: 'youtube',\n      title: $json.metadata.youtube.title,\n      description: $json.metadata.youtube.description,\n      tags: $json.metadata.youtube.tags\n    },\n    {\n      platform: 'tiktok',\n      caption: $json.metadata.tiktok.caption\n    },\n    {\n      platform: 'instagram',\n      caption: $json.metadata.instagram.caption\n    }\n  ],\n  media: [{ type: 'video', path: $json.short_path }],\n  schedule: new Date(Date.now() + 3600000).toISOString()\n}) }}",
+        "options": {}
+      },
+      "id": "node-postiz-publish",
+      "name": "HTTP — Publicar via Postiz",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1720,
+        460
+      ],
+      "notes": "CONFIGURAR: (1) suba Postiz via Docker (ver README); (2) defina POSTIZ_URL e POSTIZ_API_KEY; (3) conecte YouTube/TikTok/Instagram no painel do Postiz; (4) o short.mp4 precisa ser acessível pelo container do Postiz (volume compartilhado)."
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Shorts Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ new Date().toISOString().split('T')[0] }}",
+            "title": "={{ $json.script.title }}",
+            "hook": "={{ $json.script.hook }}",
+            "topic": "={{ $json.script.title }}",
+            "risk_level": "={{ $json.guardrail.risk_level }}",
+            "risk_score": "={{ $json.guardrail.overall_risk_score }}",
+            "hook_strength": "={{ $json.guardrail.dimensions.hook_strength }}",
+            "status": "=published",
+            "short_path": "={{ $json.short_path }}",
+            "hashtags": "={{ $json.script.hashtags.join(' ') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-sheets-log",
+      "name": "Google Sheets — Log do Short",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1940,
+        460
+      ],
+      "notes": "CONFIGURAR: (1) crie planilha 'Canal Dark Log' com colunas: date, title, hook, topic, risk_level, risk_score, hook_strength, status, short_path, hashtags; (2) configure credencial Google Sheets (Service Account); (3) cole o ID em GOOGLE_SHEET_ID."
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (08h diário)": {
+      "main": [
+        [
+          {
+            "node": "Code — Ideia via Gemini (Trend Scout)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Ideia via Gemini (Trend Scout)": {
+      "main": [
+        [
+          {
+            "node": "Code — Roteirista via Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Roteirista via Gemini": {
+      "main": [
+        [
+          {
+            "node": "Telegram — Checkpoint #1: Roteiro",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait — Aguarda Aprovação do Roteiro (24h)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait — Aguarda Aprovação do Roteiro (24h)": {
+      "main": [
+        [
+          {
+            "node": "Code — Rodar short_factory.py",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Rodar short_factory.py": {
+      "main": [
+        [
+          {
+            "node": "Code — Guardrail Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Guardrail Gemini": {
+      "main": [
+        [
+          {
+            "node": "IF — Risco Alto?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Risco Alto?": {
+      "main": [
+        [
+          {
+            "node": "Telegram — Checkpoint #2: Revisar Short",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait — Aguarda Aprovação do Short (24h)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP — Publicar via Postiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP — Publicar via Postiz": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets — Log do Short",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait — Aguarda Aprovação do Short (24h)": {
+      "main": [
+        [
+          {
+            "node": "HTTP — Publicar via Postiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "meta": {
+    "instanceId": "canal-dark-mvp-v2",
+    "templateCredsSetupCompleted": false,
+    "notes": "Canal Dark MVP v2 — Shorts narrados com roteiro IA + revisão humana + voz edge-tts + b-roll Pexels + publicação multi-plataforma. Versão: 2.0. Criado em 2026-05-29. CHECKPOINTS: #1 aprovação do roteiro (antes do TTS/b-roll), #2 aprovação do short (após guardrail). Todos os nós Code usam modo simulação — ative o código real conforme o README."
+  }
+}

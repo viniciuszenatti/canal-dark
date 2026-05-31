@@ -1,0 +1,79 @@
+=== burn_providers ===
+[
+ "Wikimedia Commons (PRIMARY BURN) — endpoint testado AO VIVO HTTP 200, sem chave; generator=search&gsrnamespace=6 retorna imageinfo[0].url + extmetadata. Filtro duro: extmetadata.LicenseShortName.value IN {'Public domain','CC0','CC0 1.0','CC-BY 4.0','CC-BY-SA 4.0','CC-BY-SA 3.0'}. É a fonte com licença MAIS explícita e por-arquivo — base segura pra monetizar.",
+ "Openverse (SECONDARY BURN) — testado AO VIVO HTTP 200; GET https://api.openverse.org/v1/images/?q=TERMO&license=cc0,pdm&page_size=N sem token. JSON já entrega results[].url + results[].license + results[].attribution (string de crédito PRONTA). Filtrar license só em {cc0,pdm} pra dispensar atribuição obrigatória. Rate limit anônimo ~20 req/min / 200 req/dia (sobra pra um bot de shorts).",
+ "Internet Archive (TERCIARY/backup BURN) — testado reachable, sem chave; advancedsearch.php?q=mediatype:image+licenseurl:* &output=json → docs[].identifier + docs[].licenseurl, URL montada em archive.org/download/{id}/{id}.jpg. SÓ aceitar licenseurl com /publicdomain/ ou /by/ ou /by-sa/. REJEITAR explicitamente NC e ND (creativecommons.org/licenses/by-nc, by-nc-nd, by-nd) — proíbem uso comercial/derivado."
+]
+
+=== anime_providers ===
+[
+ "One Piece Fandom MediaWiki (e fandom.com em geral) — VIÁVEL TECNICAMENTE mas RISCO IP ALTO: api.php?action=query&list=allimages... HTTP 200 sem chave, imagens em static.wikia.nocookie.net. PORÉM todo conteúdo é IP da Toei Animation / Shueisha + sem licença CC (só Fandom ToS). Classificar lane='ANIME' => NUNCA auto-queimar em vídeo monetizado; só atrás de flag explícita ALLOW_ANIME=1 + aprovação humana, e marcar o vídeo como não-monetizado/fair-use comentário. Tratar igual REF-ONLY na prática.",
+ "CivitAI (busca de imagens de comunidade Stable Diffusion) — civitai.com/api/v1/images?query=...&limit=N sem chave. NÃO é BURN: são uploads de usuários, muitos derivam de personagens IP (mesmo problema Toei/Shueisha) e licença varia por imagem. Útil só como REF/ANIME-risk, nunca queimar direto."
+]
+
+=== ref_provider ===
+Wikimedia Commons é a melhor REF-ONLY sem chave — e na prática é melhor que isso: como cada arquivo carrega extmetadata.LicenseShortName/LicenseUrl por-imagem e foi confirmado HTTP 200 + URLs reais baixáveis no probe, dá pra usar o MESMO endpoint em dois modos: (a) lane=BURN quando a licença bate na allowlist (uso direto), (b) lane=REF-ONLY quando a licença é desconhecida/ambígua/NC/ND — aí baixa só pra pasta out/img_ref/ e marca needs_human_approval=true sem entrar no vídeo. Vantagem sobre One Piece Fandom: tem campo de licença legível por máquina, então o gate humano é só pro caso ambíguo, não pra tudo.
+
+=== generate_provider ===
+AI Horde (aihorde.net) é o gerador GENERATE viável grátis HOJE com chave anônima '0000000000' — probe AO VIVO retornou HTTP 202 (job aceito na fila). É assíncrono (POST /api/v2/generate/async → {id} → poll GET /api/v2/generate/status/{id} até done), lento na fila anônima e limitado a imagens pequenas (<=512x512, <=20 steps) sem kudos, mas é genuinamente sem custo e sem cartão. Pollinations.ai NÃO deve ser o primary: apesar de o probe ter dado HTTP 200 com JPEG válido AGORA, o brief avisa que virou 402 recentemente E a própria resposta trouxe o header 'access-control-allow-headers: ...X-PAYMENT' (sinal de monetização em curso). Conclusão honesta: NÃO existe gerador grátis robusto e síncrono sem chave em 2026 — AI Horde é o único sem-chave confiável mas é lento; Pollinations entra só como tentativa best-effort com checagem de status em runtime (se !=200 ou content-type!=image, descarta). Geradores REALMENTE bons (Cloudflare Workers AI / FLUX-schnell) precisam de chave (free-with-key), então ficam fora da regra 'sem chave paga' até o usuário optar por criar conta Cloudflare grátis.
+
+=== env_vars ===
+[
+ "IMG_PROVIDERS — CSV global que liga/ordena providers, ex 'wikimedia,openverse,internetarchive'. Vazio = feature desligada (só Pexels, comportamento atual).",
+ "IMG_PROVIDERS_BURN / IMG_PROVIDERS_GENERATE / IMG_PROVIDERS_ANIME / IMG_PROVIDERS_REF — override de ordem por lane; se ausente, herda de IMG_PROVIDERS ou do default da lane.",
+ "IMG_LANE — lane padrão quando o roteiro não especifica (default 'burn').",
+ "ALLOW_ANIME — '1' habilita lane anime (fandom/civitai); default off. Mesmo ligado, marca needs_human_approval.",
+ "ALLOW_REF — '1' permite baixar imagens REF-ONLY pra out/img_ref/ pra revisão humana; default off.",
+ "IMG_CACHE_DIR — default out/img_cache; onde ficam {hash}.jpg + sidecar .json.",
+ "IMG_PER_LINE — quantas imagens por linha (default 1).",
+ "OPENVERSE_LICENSES — default 'cc0,pdm' (só licenças sem atribuição obrigatória).",
+ "WIKIMEDIA_LICENSE_ALLOWLIST — override da allowlist BURN; default 'Public domain,CC0,CC0 1.0,CC-BY 4.0,CC-BY-SA 4.0,CC-BY-SA 3.0'.",
+ "AIHORDE_API_KEY — default '0000000000' (anônimo grátis); usuário pode pôr a própria pra fila mais rápida.",
+ "IMG_HTTP_TIMEOUT — default 30s (Wikimedia/Openverse) / 120s p/ geradores."
+]
+
+=== dead_or_paid ===
+[
+ "Pollinations.AI como PRIMARY GENERATE — o brief afirma como fato (e a entrada que diz 'HTTP 200 FREE em 2026, não é 402') que ele virou PAGO/402 recentemente; meu probe deu 200 mas a resposta traz header X-PAYMENT (monetização ativa). NÃO é confiável como primary; rebaixado a fallback best-effort com checagem de status em runtime. A entrada do brief que afirma '200 FREE garantido' está OTIMISTA demais — ignorada.",
+ "Cloudflare Workers AI (FLUX-1-schnell) — needs_key=true / free-with-key. Viola a regra 'sem chave paga' por padrão (exige conta Cloudflare + API token). Fica FORA do default; só opt-in manual do usuário. Tecnicamente grátis no tier, mas não sem-chave.",
+ "Pexels como GERADOR/acervo principal de IMAGEM — needs_key=true (PEXELS_API_KEY). Continua sendo o fallback de VÍDEO (já integrado), NÃO entra como fonte de imagem-livre nova; e por exigir chave não conta como provider 'sem chave'.",
+ "One Piece Fandom MediaWiki / static.wikia.nocookie.net (lane ANIME) — alcançável e sem chave, MAS sem licença CC e 100% IP Toei/Shueisha. recommend=false no próprio brief. Morto pra uso monetizado direto; só atrás de ALLOW_ANIME + aprovação humana.",
+ "CivitAI (lane ANIME/GENERATE) — sem chave mas uploads de usuários com IP e licença variável por imagem; não é BURN. Não serve pra queimar direto.",
+ "Jikan / MyAnimeList / AniList — explicitamente citados no brief como PROIBIDOS por ToS pra conteúdo monetizado/redistribuição. Não usar.",
+ "AI Horde p/ imagens grandes/alta qualidade — imagens >771x771 ou >50 steps exigem kudos prévios (fila lenta/efetivamente bloqueada no anônimo). Grátis só pra <=512x512 poucos steps, e mesmo assim lento. Não-morto, mas limitado."
+]
+
+=== find_images_design ===
+ASSINATURA: find_images(query: str, niche: str, lane: str, count: int = 1, out_dir: Path = OUT/'img_cache') -> list[Path].
+
+LANES: 'burn' (default p/ tudo monetizado), 'anime' (gated por ALLOW_ANIME=1), 'ref' (só baixa p/ out/img_ref/, marca needs_human_approval), 'generate'. O chamador passa lane derivada do nicho/subject_mode; default sempre 'burn'.
+
+ORDEM DE PROVIDERS POR LANE (lida de env, com default sensato):
+  - burn  : [wikimedia, openverse, internetarchive]  (todos com licença por-arquivo verificável)
+  - generate: [aihorde, pollinations]  (aihorde primeiro pq é o sem-chave confiável; pollinations best-effort com checagem 200+content-type)
+  - anime : [] por padrão (vazio = desligado); só [fandom, civitai] se ALLOW_ANIME=1, e mesmo assim marca needs_human_approval
+  - ref   : [wikimedia, internetarchive] em modo só-referência (não entra no vídeo)
+Por-nicho: mapa NICHE_LANE_HINT (ex history->burn preferindo wikimedia+internetarchive; science->burn wikimedia+openverse; anime-nicho->generate primeiro, depois anime gated). Nicho só REORDENA a lista da lane, nunca fura o gate de copyright.
+
+LÓGICA: 1) normaliza query (strip, 1ª cena antes de vírgula, reusa _tokenize do short_factory pra dedupe). 2) calcula cache_key = sha1(provider+query+lane+index)[:16]; se out_dir/{cache_key}.jpg existe E out_dir/{cache_key}.json (sidecar de licença) existe -> retorna do cache (dedupe inter-execução). 3) percorre providers da lane em ordem; cada provider é uma função provider_fn(query, count) -> list[ImageResult] onde ImageResult={url|bytes, license, attribution, source_provider, source_url, needs_human_approval}. 4) FILTRO BURN: descarta qualquer result cuja license não esteja na BURN_ALLOWLIST (PD/CC0/CC-BY/CC-BY-SA); descarta NC e ND sempre. 5) DEDUPE: mantém set de hashes (sha1 dos bytes baixados) + set de source_url já vistos nesta run pra não repetir a mesma imagem em 2 linhas. 6) baixa via requests (reusa timeout/stream do _fetch_pexels), valida content-type image/* e tamanho > 2KB (mesma guarda do _fetch_pollinations que checa <1000 bytes). 7) grava {cache_key}.jpg + sidecar {cache_key}.json com {provider, source_url, license, attribution, query, lane, ts}. 8) acumula crédito num CREDITS.jsonl append em out/.
+
+FALLBACK PRO PEXELS: find_images NÃO baixa vídeo; se a lane esgotar todos os providers sem imagem válida (ou lane='ref' que nunca entra no vídeo), retorna [] e o chamador (fetch_broll) cai no _fetch_pexels existente -> e este já tem o piso de cor sólida (create_solid_color_clip). Cadeia: imagem-livre -> (vazio) -> Pexels vídeo -> (None) -> cor sólida. Zero regressão: se IMG_PROVIDERS estiver vazio/desligado, find_images retorna [] na hora e o comportamento atual (só Pexels) é idêntico.
+
+REGISTRO DE LICENÇA: cada imagem usada gera 1 linha em out/CREDITS.jsonl + sidecar .json no cache; assemble_short no fim concatena os créditos num bloco pra description do vídeo.
+
+=== attribution_rule ===
+Toda imagem que entra no vídeo grava 2 artefatos: (1) um sidecar JSON ao lado do arquivo no cache out/img_cache/{hash}.json com {provider, source_url, license, license_url, attribution, artist, query, lane, used_in_run, timestamp}; (2) 1 linha append-only em out/CREDITS.jsonl por uso. No fim do pipeline, assemble_short/build_publication_metadata concatena os créditos num bloco de texto 'Image credits:' anexado à description do metadata.json (que vai pro YouTube/Postiz). Regra por licença: CC0/Public Domain -> crédito OPCIONAL mas registrado mesmo assim; CC-BY/CC-BY-SA -> crédito OBRIGATÓRIO no formato 'Artist - Título (LicenseShortName) via Provider, source_url' (Wikimedia entrega Artist+LicenseShortName; Openverse entrega a string attribution pronta — usar literal). Geradas por IA (AI Horde/Pollinations) -> registrar provider+prompt+seed, sem crédito de copyright de foto. REF-ONLY -> nunca chega aqui (não entra no vídeo). Se uma imagem CC-BY for usada e por algum motivo o crédito não puder ser montado (campo Artist vazio), a imagem é DESCARTADA, não usada sem crédito.
+
+=== edit_plan ===
+[
+ "1) Criar módulo novo C:/Users/aless/canal-dark/image_providers.py. Imports: os, re, json, hashlib, time, urllib.parse, requests, pathlib.Path, logging (reusar o logger 'log' via getLogger). Definir dataclass/dict ImageResult e BURN_ALLOWLIST.",
+ "2) No image_providers.py implementar uma função por provider, todas com assinatura provider(query, count) -> list[ImageResult]: _prov_wikimedia (generator=search&gsrnamespace=6, extrai imageinfo[0].url + extmetadata.LicenseShortName/Artist/LicenseUrl, filtra allowlist), _prov_openverse (q + license=cc0,pdm, lê results[].url/license/attribution), _prov_internetarchive (advancedsearch licenseurl:*, monta download URL, rejeita NC/ND), _prov_aihorde (POST async + poll status, key anônima), _prov_pollinations (reaproveita a URL do _fetch_pollinations atual mas checa status 200 + content-type image/*), _prov_fandom e _prov_civitai (lane anime, needs_human_approval=True).",
+ "3) No image_providers.py implementar find_images(query, niche, lane, count, out_dir): resolve ordem de providers (env IMG_PROVIDERS_* > IMG_PROVIDERS > default da lane, depois reordena por NICHE_LANE_HINT), aplica gate ALLOW_ANIME/ALLOW_REF, cache por hash, dedupe por bytes-hash e source_url, download com validação, grava sidecar .json + append em CREDITS.jsonl. Retorna list[Path] (vazio se nada).",
+ "4) Em short_factory.py, no topo de fetch_broll (linha ~835): antes do dispatch atual, se IMG_PROVIDERS estiver setada (ou source=='image'), tentar paths = image_providers.find_images(query, niche=os.environ.get('CANAL_DARK_NICHE',''), lane=_lane_for(vctx), count=1, out_dir=out_dir); se paths: return paths[0]. Só então cair no _fetch_pexels existente. Import local 'import image_providers' dentro da função pra não quebrar se o módulo faltar (try/except ImportError -> log + segue Pexels).",
+ "5) Adicionar helper _lane_for(vctx) em short_factory.py: mapeia subject_mode/niche -> lane ('burn' default; 'generate' se IMG_LANE=generate; 'anime' só se ALLOW_ANIME). Default conservador = 'burn'.",
+ "6) prepare_broll_segment NÃO muda: já detecta .jpg/.png por suffix (linha 1205) e aplica _ken_burns_clip. As imagens livres entram nesse caminho de graça.",
+ "7) Adicionar choice 'image' ao argparse --broll-source (linha ~1790, hoje só pexels|ai) pra forçar o modo imagem-livre via CLI, mantendo 'pexels' como default (zero regressão).",
+ "8) build_publication_metadata: anexar bloco 'Image credits:' lendo out/CREDITS.jsonl da run atual.",
+ "9) Atualizar .env.example e requirements.txt: requests já está lá (2.32.3), só documentar as novas env vars IMG_PROVIDERS etc. Sem dependência nova.",
+ "10) Teste de fumaça: rodar find_images('samurai duel','history','burn',1) isolado e conferir que baixa de Wikimedia/Openverse + gera sidecar; depois rodar o pipeline com IMG_PROVIDERS=wikimedia,openverse e --broll-source image num tópico curto."
+]

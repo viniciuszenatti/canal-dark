@@ -1,0 +1,25 @@
+{
+  "title": "The Heiress Who Killed Her Parents While They Slept",
+  "hook": "In 2002, a 19-year-old kissed her parents goodnight — then unlocked the door for the men who would beat them to death.",
+  "visual_context": {
+    "setting": "upper-class home in Sao Paulo Brazil",
+    "era": "early 2000s",
+    "mood": "tense somber",
+    "palette": "cold blue low light",
+    "subject_mode": "places",
+    "anchor_terms": ["true crime", "night"],
+    "avoid_terms": ["lake","water","fish","beach","party","helicopter","wildlife","nature","ocean","aquarium"]
+  },
+  "lines": [
+    {"text": "In 2002, a 19-year-old kissed her parents goodnight — then unlocked the door for the men who would beat them to death.", "broll_query": "dark suburban mansion at night"},
+    {"text": "Her name was Suzane von Richthofen. On the surface: wealthy, intelligent, the perfect daughter of a respected engineer in Sao Paulo.", "broll_query": "elegant family home exterior dusk"},
+    {"text": "But her parents disapproved of her boyfriend, Daniel. So Suzane chose the inheritance over them.", "broll_query": "old locked diary on desk"},
+    {"text": "On Halloween night, she let Daniel and his brother into the house. While Manfred and Marisia slept, the brothers struck them with iron bars.", "broll_query": "iron bar on bedroom floor"},
+    {"text": "Then they staged a robbery — drawers pulled open, valuables scattered — and Suzane took her younger brother out for ice cream to build an alibi.", "broll_query": "ransacked open drawers dim room"},
+    {"text": "It almost worked. But police noticed the burglars ignored the cash in plain sight, and the family dog never barked.", "broll_query": "crime scene investigation at night"},
+    {"text": "Within days, the perfect daughter confessed. The trial gripped Brazil — how could someone so privileged feel so little?", "broll_query": "empty courtroom benches"},
+    {"text": "Suzane was sentenced to 39 years. She has since been released to open prison — a free woman who, many say, never showed real remorse.", "broll_query": "prison gate closing at dusk"}
+  ],
+  "cta": "Do you think she deserved her release? Follow for more true crime.",
+  "hashtags": ["#truecrime", "#suzanevonrichthofen", "#crimestory", "#brazil", "#unsolved"]
+}
