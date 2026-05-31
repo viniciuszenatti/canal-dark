@@ -312,6 +312,44 @@ def _parse_niche(rest: str) -> tuple[str | None, str]:
     return None, rest
 
 
+# Chaves aceitas no formato estruturado (mensagem-modelo copiável)
+_NICHE_KEYS = ("nicho", "niche")
+_TOPIC_KEYS = ("ideia de video", "ideia de vídeo", "ideia", "tema", "video", "vídeo", "assunto")
+
+
+def _parse_structured_request(text: str) -> tuple[str | None, str] | None:
+    """
+    Entende a mensagem-modelo (campos 'chave: valor'), ex.:
+        nicho: crimes
+        ideia de video: a história da Suzane von Richthofen
+
+    Aceita variações de chave/ordem e bullets (•, -, *) no começo da linha.
+    Retorna (niche, topic) se reconhecer o formato (pelo menos uma chave válida
+    presente); caso contrário None (aí o handle trata como 'não entendi').
+    """
+    niche_raw: str | None = None
+    topic: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("•-*").strip()
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip().lower()
+        val = val.strip().strip('"').strip()
+        if key in _NICHE_KEYS:
+            niche_raw = val
+        elif key in _TOPIC_KEYS:
+            topic = val
+    if topic is None and niche_raw is None:
+        return None  # não é o formato estruturado
+
+    niche: str | None = None
+    if niche_raw:
+        k = niche_raw.lower().strip()
+        niche = NICHE_ALIASES.get(k) or (k if k in set(NICHE_ALIASES.values()) else None)
+    return niche, (topic or "")
+
+
 # ---------------------------------------------------------------------------
 # Referências de imagem (pasta pending)
 # ---------------------------------------------------------------------------
@@ -755,29 +793,12 @@ def _start_job(topic: str, niche: str | None, chat: str, ref_dir: Path | None) -
 # Handlers de comandos
 # ---------------------------------------------------------------------------
 
-def handle_gerar_or_roteiro(chat: str, text: str) -> None:
-    """Trata /gerar e /roteiro — ambos disparam o fluxo de checkpoint."""
-    global current_job
-
-    # Decide qual prefixo foi usado
-    if text.startswith("/gerar"):
-        rest = text[len("/gerar"):].strip()
-    else:
-        rest = text[len("/roteiro"):].strip()
-
-    if not rest:
-        send(
-            chat,
-            "Uso: /roteiro <nicho> <tema>\n"
-            "Nichos: crimes | misterios | onepiece\n"
-            "Ex: /roteiro crimes the Somerton Man\n\n"
-            "/gerar é um atalho para o mesmo fluxo.",
-        )
-        return
-
-    niche, topic = _parse_niche(rest)
+def _begin_generation(chat: str, niche: str | None, topic: str) -> None:
+    """Inicia o fluxo de geração (1 job por vez, refs, confirmação).
+    Compartilhado por /gerar, /roteiro e o formato estruturado (modelo)."""
+    topic = (topic or "").strip()
     if not topic:
-        send(chat, "Faltou o tema. Ex: /gerar crimes the Somerton Man")
+        send(chat, "Faltou a *ideia de vídeo*. Use /novo para pegar o modelo pronto.", parse_mode="Markdown")
         return
 
     with job_lock:
@@ -797,6 +818,22 @@ def handle_gerar_or_roteiro(chat: str, text: str) -> None:
         f"⚙️ Gerando roteiro para: \"{topic}\" [{niche or 'sem nicho'}]"
         f"{ref_note}\nVou te mostrar o roteiro para aprovação antes de gerar o vídeo.",
     )
+
+
+def handle_gerar_or_roteiro(chat: str, text: str) -> None:
+    """Trata /gerar e /roteiro — ambos disparam o fluxo de checkpoint."""
+    # Decide qual prefixo foi usado
+    if text.startswith("/gerar"):
+        rest = text[len("/gerar"):].strip()
+    else:
+        rest = text[len("/roteiro"):].strip()
+
+    if not rest:
+        handle_novo(chat)  # sem argumentos → manda o modelo copiável
+        return
+
+    niche, topic = _parse_niche(rest)
+    _begin_generation(chat, niche, topic)
 
 
 def handle_status(chat: str) -> None:
@@ -876,6 +913,21 @@ def handle_refs(chat: str, args: str) -> None:
             send(chat, f"📎 {count} referência(s) pendente(s) para o próximo /gerar.\nUse /refs limpar para remover.")
 
 
+def handle_novo(chat: str) -> None:
+    """Manda a mensagem-modelo copiável para um novo pedido de vídeo."""
+    send(
+        chat,
+        "📋 *Novo vídeo* — copie o bloco, preencha a ideia e me mande de volta:\n\n"
+        "```\n"
+        "nicho: crimes\n"
+        "ideia de video: \n"
+        "```\n"
+        "Nichos: *crimes* · *misterios* · *onepiece*  (use /nichos p/ detalhes)\n"
+        "📎 Dica: mande uma foto ou link de imagem *antes* — entra como referência no vídeo.",
+        parse_mode="Markdown",
+    )
+
+
 def handle_nichos(chat: str) -> None:
     send(
         chat,
@@ -891,21 +943,21 @@ def handle_ajuda(chat: str) -> None:
     send(
         chat,
         "🤖 *Canal Dark Bot* — comandos:\n\n"
-        "/roteiro <nicho> <tema> — gera roteiro → aprova → recebe vídeo\n"
-        "/gerar <nicho> <tema>   — atalho para /roteiro (mesmo fluxo)\n"
-        "/status — mostra o job em andamento\n"
+        "/novo — modelo pronto pra copiar e pedir um vídeo\n"
+        "/gerar <nicho> <tema> — pedido em uma linha (atalho)\n"
+        "/status — job em andamento (fase, etapa, tempo)\n"
         "/cancel — cancela o job atual\n"
-        "/refs   — mostra quantas imagens de referência há pendentes\n"
-        "/refs limpar — apaga as referências pendentes\n"
-        "/nichos — lista os nichos disponíveis\n\n"
-        "*Fluxo:*\n"
-        "1. Manda /roteiro crimes o assassinato de JFK\n"
-        "2. Bot gera o roteiro e mostra no chat\n"
-        "3. Você aprova ✅ (ou pede refazer 🔄 ou cancela ❌)\n"
-        "4. Bot gera o vídeo e manda aqui\n"
-        "5. Você publica 👍 ou descarta 🗑\n\n"
-        "*Referências:* mande uma foto ou link de imagem (.jpg/.png/.webp) "
-        "antes do /gerar para forçar essas imagens no b-roll.",
+        "/refs — referências de imagem pendentes (/refs limpar p/ apagar)\n"
+        "/nichos — lista os nichos\n"
+        "/ajuda — esta ajuda\n\n"
+        "*Jeito mais fácil — mande assim (ou use /novo):*\n"
+        "```\n"
+        "nicho: crimes\n"
+        "ideia de video: o caso do Homem de Somerton\n"
+        "```\n"
+        "*Fluxo:* peço o roteiro → você aprova ✅ (ou 🔄 refazer / ❌ cancela) → "
+        "gero o vídeo → você publica 👍 ou descarta 🗑.\n"
+        "📎 *Referências:* mande foto/link de imagem antes do pedido para forçar no b-roll.",
         parse_mode="Markdown",
     )
 
@@ -1115,6 +1167,9 @@ def handle(chat: str, update_msg: dict) -> None:
     if text.startswith("/gerar") or text.startswith("/roteiro"):
         handle_gerar_or_roteiro(chat, text)
 
+    elif text.startswith("/novo") or text.startswith("/modelo") or text.startswith("/template"):
+        handle_novo(chat)
+
     elif text.startswith("/status"):
         handle_status(chat)
 
@@ -1132,28 +1187,47 @@ def handle(chat: str, update_msg: dict) -> None:
         handle_ajuda(chat)
 
     else:
-        send(
-            chat,
-            "Não entendi. Comandos disponíveis:\n"
-            "/roteiro <nicho> <tema> — cria um short com checkpoint de aprovação\n"
-            "/gerar <nicho> <tema>   — atalho para /roteiro\n"
-            "/status, /cancel, /refs, /nichos, /ajuda",
-        )
+        # Formato estruturado (mensagem-modelo): "nicho:" / "ideia de video:"
+        parsed = _parse_structured_request(text)
+        if parsed is not None:
+            niche, topic = parsed
+            _begin_generation(chat, niche, topic)
+        else:
+            send(
+                chat,
+                "Não entendi. Use /novo para pegar o modelo de pedido.\n"
+                "Comandos: /novo · /gerar · /status · /cancel · /refs · /nichos · /ajuda",
+            )
 
 
 # ---------------------------------------------------------------------------
 # Loop principal de polling
 # ---------------------------------------------------------------------------
 
+def _set_bot_commands() -> None:
+    """Registra o menu de comandos (aparece no botão '/' do Telegram)."""
+    commands = [
+        {"command": "novo", "description": "Modelo pronto pra pedir um vídeo"},
+        {"command": "gerar", "description": "Pedido em uma linha: <nicho> <tema>"},
+        {"command": "status", "description": "Job em andamento (fase, tempo)"},
+        {"command": "cancel", "description": "Cancela o job atual"},
+        {"command": "refs", "description": "Referências de imagem pendentes"},
+        {"command": "nichos", "description": "Lista os nichos"},
+        {"command": "ajuda", "description": "Ajuda e fluxo"},
+    ]
+    _api("setMyCommands", data={"commands": json.dumps(commands)})
+
+
 def main() -> None:
     if not TOKEN or not OWNER:
         print("ERRO: TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID precisam estar no .env")
         sys.exit(1)
 
+    _set_bot_commands()
     send(
         OWNER,
         "🤖 Canal Dark Bot ONLINE.\n"
-        "Fluxo: /roteiro <nicho> <tema> → aprova roteiro → recebe vídeo.\n"
+        "Manda /novo pra pegar o modelo de pedido (nicho + ideia de vídeo).\n"
         "/ajuda para ver todos os comandos.",
     )
     print("Bot ouvindo... (Ctrl+C pra parar)")
