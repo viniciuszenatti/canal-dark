@@ -822,6 +822,11 @@ def _lane_for(vctx: Optional[dict]) -> str:
     if env_lane in ("burn", "generate", "anime", "ref"):
         return env_lane
 
+    # Modo cinematográfico (IA): gera imagens coesas a partir do visual_context
+    # em vez de buscar banco genérico. Ligado por IMG_STYLE=cinematic no .env.
+    if os.environ.get("IMG_STYLE", "").strip().lower() == "cinematic":
+        return "generate"
+
     if vctx:
         subject_mode = (vctx.get("subject_mode") or "").lower()
         if subject_mode == "anime" and os.environ.get("ALLOW_ANIME", "0") == "1":
@@ -857,22 +862,34 @@ def fetch_broll(
     Retorna o Path do arquivo baixado, ou None se nada encontrado.
     O chamador deve lidar com None usando fallback de cor sólida.
     """
-    # ── image_providers: tenta primeiro se source=="image" OU IMG_PROVIDERS definido ──
+    # ── image_providers: tenta 1º se source=="image", IMG_PROVIDERS setado, OU modo cinematic ──
+    cinematic = os.environ.get("IMG_STYLE", "").strip().lower() == "cinematic"
     use_image_providers = (
         source == "image"
         or bool(os.environ.get("IMG_PROVIDERS", "").strip())
+        or cinematic
     )
     if use_image_providers:
         try:
             import image_providers  # type: ignore
             niche = os.environ.get("CANAL_DARK_NICHE", "")
             lane = _lane_for(vctx)
+            # Estilo coeso (bíblia visual) → todo shot do vídeo compartilha paleta/mood/era.
+            style = None
+            if vctx:
+                style = {
+                    "palette": vctx.get("palette"),
+                    "mood": vctx.get("mood"),
+                    "era": vctx.get("era"),
+                    "style": vctx.get("setting"),
+                }
             paths = image_providers.find_images(
                 query,
                 niche=niche,
                 lane=lane,
                 count=1,
                 out_dir=out_dir,
+                style=style,
             )
             if paths:
                 log.info("B-roll via image_providers: %s", paths[0].name)

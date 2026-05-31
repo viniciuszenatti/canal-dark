@@ -24,6 +24,7 @@ Variáveis de ambiente:
 """
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -161,6 +162,23 @@ def _sha1(data: bytes) -> str:
 def _cache_key(provider: str, query: str, lane: str, index: int) -> str:
     raw = f"{provider}|{query}|{lane}|{index}"
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def _build_gen_prompt(query: str, style: Optional[dict]) -> str:
+    """
+    Monta o prompt de GERAÇÃO de imagem combinando a query da cena com a 'bíblia
+    visual' (visual_context) do roteiro. É o que dá COESÃO: todo shot do vídeo
+    compartilha paleta/mood/era → parece dirigido, não stock genérico.
+    """
+    style = style or {}
+    bits = [query.strip()]
+    for k in ("palette", "mood", "era", "style"):
+        v = str(style.get(k) or "").strip()
+        if v and v.lower() not in (query or "").lower():
+            bits.append(v)
+    bits += ["cinematic", "dramatic volumetric lighting", "highly detailed",
+             "vertical 9:16 composition", "no text", "no watermark"]
+    return ", ".join(b for b in bits if b)
 
 
 # ---------------------------------------------------------------------------
@@ -333,13 +351,13 @@ def _prov_internetarchive(query: str, count: int) -> list:
     return results
 
 
-def _prov_aihorde(query: str, count: int) -> list:
+def _prov_aihorde(query: str, count: int, style: Optional[dict] = None) -> list:
     """
     AI Horde — geração gratuita de imagens via fila pública.
     Usa AIHORDE_API_KEY (padrão "0000000000" = fila de baixa prioridade, grátis).
     """
     api_key = os.environ.get("AIHORDE_API_KEY", "0000000000")
-    prompt = f"{query}, cinematic, vertical"
+    prompt = _build_gen_prompt(query, style)
     payload = {
         "prompt": prompt,
         "params": {
@@ -429,13 +447,14 @@ def _prov_aihorde(query: str, count: int) -> list:
     return []
 
 
-def _prov_pollinations(query: str, count: int) -> list:
+def _prov_pollinations(query: str, count: int, style: Optional[dict] = None) -> list:
     """
-    Pollinations.ai — geração grátis de imagens sem chave.
+    Pollinations.ai (FLUX) — geração grátis de imagens sem chave.
     Best-effort: retorna [] se falhar ou imagem for muito pequena.
     """
-    encoded = urllib.parse.quote(f"{query}, cinematic, dramatic lighting", safe="")
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920"
+    prompt = _build_gen_prompt(query, style)
+    encoded = urllib.parse.quote(prompt, safe="")
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&model=flux&nologo=true"
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_GEN_TIMEOUT)
         ct = resp.headers.get("content-type", "")
@@ -459,6 +478,57 @@ def _prov_pollinations(query: str, count: int) -> list:
         source_provider="pollinations",
         source_url="https://pollinations.ai/",
         bytes_data=resp.content,
+    )]
+
+
+def _prov_cloudflare(query: str, count: int, style: Optional[dict] = None) -> list:
+    """
+    Cloudflare Workers AI (FLUX) — geração grátis com conta (10.000 neurons/dia).
+    Requer CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN no .env; sem eles, pula.
+    Qualidade alta e estável → provider preferido da lane 'generate' quando configurado.
+    """
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if not account or not token:
+        log.info("[cloudflare] sem CLOUDFLARE_ACCOUNT_ID/API_TOKEN — pulando (opcional).")
+        return []
+
+    model = os.environ.get("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
+    prompt = _build_gen_prompt(query, style)
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", **_HEADERS}
+
+    try:
+        resp = requests.post(url, json={"prompt": prompt, "steps": 6},
+                             headers=headers, timeout=_GEN_TIMEOUT)
+        if resp.status_code != 200:
+            log.warning("[cloudflare] HTTP %s: %s", resp.status_code, resp.text[:200])
+            return []
+        ct = resp.headers.get("content-type", "")
+        if ct.startswith("image/"):
+            img_bytes = resp.content
+        else:
+            data = resp.json()
+            b64 = (data.get("result") or {}).get("image", "")
+            if not b64:
+                log.warning("[cloudflare] resposta sem result.image")
+                return []
+            import base64
+            img_bytes = base64.b64decode(b64)
+    except Exception as exc:
+        log.warning("[cloudflare] erro: %s", exc)
+        return []
+
+    if len(img_bytes) < 2000:
+        return []
+
+    return [ImageResult(
+        url=f"cloudflare://flux/{_sha1(img_bytes)[:12]}",
+        license="ai-generated",
+        attribution="",
+        source_provider="cloudflare",
+        source_url="https://developers.cloudflare.com/workers-ai/",
+        bytes_data=img_bytes,
     )]
 
 
@@ -551,6 +621,7 @@ _PROVIDER_REGISTRY = {
     "wikimedia": _prov_wikimedia,
     "openverse": _prov_openverse,
     "internetarchive": _prov_internetarchive,
+    "cloudflare": _prov_cloudflare,
     "aihorde": _prov_aihorde,
     "pollinations": _prov_pollinations,
     "fandom": _prov_fandom,
@@ -560,7 +631,9 @@ _PROVIDER_REGISTRY = {
 # Providers padrão por lane
 _LANE_DEFAULTS = {
     "burn": ["wikimedia", "openverse", "internetarchive"],
-    "generate": ["aihorde", "pollinations"],
+    # generate: Cloudflare FLUX primeiro (grátis com token, alta qualidade);
+    # cai pro Pollinations (grátis sem chave) e AI Horde (grátis, lento) se faltar/falhar.
+    "generate": ["cloudflare", "pollinations", "aihorde"],
     "anime": [],   # só ativado via ALLOW_ANIME=1
     "ref": ["wikimedia", "internetarchive"],
 }
@@ -600,6 +673,7 @@ def find_images(
     lane: str,
     count: int = 1,
     out_dir: Optional[Path] = None,
+    style: Optional[dict] = None,
 ) -> list:
     """
     Busca, filtra e baixa imagens livres ou geradas para uso como b-roll.
@@ -672,9 +746,13 @@ def find_images(
             collected.append(dest)
             continue
 
-        # Busca via provider
+        # Busca via provider. Geradores (cloudflare/pollinations/aihorde) aceitam
+        # 'style' (visual_context) p/ prompt coeso; providers de banco ignoram.
         try:
-            candidates = fn(query, count)
+            if "style" in inspect.signature(fn).parameters:
+                candidates = fn(query, count, style)
+            else:
+                candidates = fn(query, count)
         except Exception as exc:
             log.warning("[image_providers] Erro no provider '%s': %s", provider_name, exc)
             continue
