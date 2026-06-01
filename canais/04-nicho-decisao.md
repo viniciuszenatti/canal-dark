@@ -2,15 +2,16 @@
 projeto: canal-dark
 tipo: canal
 tema: nicho-decisao
-atualizado: 2026-05-30
+atualizado: 2026-05-31
 ---
 
-# 🎯 Canal 04 — Decisão de Nicho
+# 🎯 Canal 04 — Nicho (DECIDIDO: 3 canais em paralelo)
 
-> **Objetivo:** escolher UM nicho e travar a persona. É o **gargalo principal** do projeto —
-> nada escala de verdade enquanto não decidir.
+> **Estado atual (31/05):** nicho DECIDIDO. Rodamos os **3 como CANAIS SEPARADOS em paralelo**
+> (true-crimes / conspiracy / one-piece), cada um com persona, voz e b-roll próprios. Não é mais
+> "escolher 1" — deixou de ser gargalo. Foco agora: firmar persona e plataforma-foco POR canal.
 
-**Quando usar:** comparar nichos, definir persona/voz, decidir plataforma-foco.
+**Quando usar:** firmar persona/voz de cada canal, decidir plataforma-foco por nicho, comparar desempenho.
 
 ## Os 3 candidatos (base completa em `nichos/`)
 
@@ -30,10 +31,10 @@ atualizado: 2026-05-30
 
 ## Backlog
 
-- [ ] **DECIDIR 1 nicho** (com critério: monetização vs paixão vs risco vs facilidade de roteiro único).
-- [ ] Definir **persona nomeada** (nome, voz, ângulo) — defesa anti "inauthentic content".
-- [ ] Escolher plataforma-foco coerente com o nicho (YouTube AdSense vs TikTok alcance).
-- [ ] Rodar 3 vídeos-piloto do nicho escolhido e medir retenção antes de escalar.
+- [x] ~~Decidir 1 nicho~~ → DECIDIDO 31/05: rodar os 3 em paralelo como canais separados.
+- [x] Definir **persona nomeada** de CADA canal — feito (Fase 3, 31/05): **The Cold File**/Marcus Vale (`en-US-GuyNeural`), **The Quiet Hour**/Silas Vance (`en-GB-RyanNeural`), **Poneglyph Theory**/"Cobb" (`en-US-AndrewNeural`). Detalhe + roteiros-ouro no `02-roteiro` de cada nicho; refs em `_referencias.md`.
+- [ ] Escolher plataforma-foco por nicho (true-crime/conspiracy → YouTube AdSense; one-piece → TikTok/alcance, AdSense secundário).
+- [ ] Rodar vídeos-piloto de cada canal e medir retenção antes de escalar.
 
 ## Links
 

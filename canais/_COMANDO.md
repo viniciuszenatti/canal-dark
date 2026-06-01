@@ -28,7 +28,7 @@ atualizado: 2026-05-30
 | 01 | [Melhorias de Vídeo](01-melhorias-video.md) | legenda, b-roll, montagem FFmpeg, voz, qualidade do `short_factory.py` |
 | 02 | [Melhorias de Prompt](02-melhorias-prompt.md) | system prompts do roteirista/trend/guardrail, visual_context, voz por nicho |
 | 03 | [Melhorias do Telegram](03-melhorias-telegram.md) | bot: status ao vivo, botões, envio de referências, fila, async |
-| 04 | [Decisão de Nicho](04-nicho-decisao.md) | escolher 1 dos 3 nichos e travar a persona |
+| 04 | [Nicho (decidido)](04-nicho-decisao.md) | persona/voz por canal — 3 nichos rodando em paralelo |
 | 05 | [Publicação & Distribuição](05-publicacao-distribuicao.md) | Postiz, contas, metadata, política de plataforma, AI disclosure |
 | 06 | [Infra · n8n · Servidor](06-infra-n8n-servidor.md) | n8n MVP, orquestração, VPS 24/7, automação |
 | 07 | [ClipRadar · Trends · ML](07-clipradar-trends.md) | scanner de tendências + analisador de cortes (futuro ML) |
@@ -37,7 +37,7 @@ atualizado: 2026-05-30
 
 Todo artefato do Canal Dark vive em **3 lugares** e os 3 ficam em dia:
 1. **Repo que roda**: `C:\Users\aless\canal-dark` (fonte).
-2. **Obsidian**: `C:\Users\aless\Obsidian\MeuVault\Canal Dark\`.
+2. **Obsidian**: `C:\Users\aless\obsidian-vault-1\Canal Dark\`. ⚠️ o vault é PÚBLICO no GitHub → NUNCA escrever segredo (chave/token/chave privada) ali.
 3. **Cópia navegável**: `C:\Users\aless\OneDrive\Desktop\canal-dark` (sem `.env`/`.venv`/`out`).
 
 ## Snapshot do projeto (2026-05-30)
@@ -48,7 +48,7 @@ Todo artefato do Canal Dark vive em **3 lugares** e os 3 ficam em dia:
 - **Bot Telegram** (`telegram_bot.py`): só `/gerar`, `/start`, `/ajuda`. **Trava** durante a geração
   (subprocess síncrono no loop) → precisa virar async antes de status/botões. → canal **03**.
 - **n8n MVP 2.0**: importado e inativo, em modo simulação. → canal **06**.
-- **Nicho**: ainda **não decidido** (true-crime / conspiracy / one-piece). Gargalo. → canal **04**.
+- **Nicho**: DECIDIDO 31/05 — 3 canais em paralelo (true-crime / conspiracy / one-piece). → canal **04**.
 - **Servidor 24/7**: Oracle pausado (out of capacity); rodando **local** por enquanto. → canal **06**.
 - **Roteiro de teste**: `roteiros/suzane.json` (true-crime, caso real — exemplo do trade-off de copyright).
 

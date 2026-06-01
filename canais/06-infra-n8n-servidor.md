@@ -2,7 +2,7 @@
 projeto: canal-dark
 tipo: canal
 tema: infra-n8n-servidor
-atualizado: 2026-05-30
+atualizado: 2026-05-31
 ---
 
 # ⚙️ Canal 06 — Infra · n8n · Servidor
@@ -19,9 +19,14 @@ atualizado: 2026-05-30
   **Importado e INATIVO**, todos os nós Code em **modo simulação** (código real comentado, pronto pra ligar).
 - Hospedado no n8n de **HML da S4S** (`hml-editor.staff4solutions.com.br`), workflow id `dz3ehGcD3srs7vtQ`.
   **RESTRIÇÃO DURA: só ADICIONAR, nunca alterar/excluir nada que já existe nesse n8n.**
-- **Servidor 24/7**: Oracle Cloud free (ARM A1) **pausado** — "out of capacity" a noite toda.
-  Rodando **local** por enquanto (o bot já gera vídeo). Se retomar 24/7: recomendado **Hetzner (~R$25/mês)**.
-- Script de auto-retry da VM: `infra/oci_retry_launch.py` (loop até pegar vaga, avisa no Telegram).
+- **Servidor 24/7**: **Hetzner contratado** (substitui a rota Oracle, que ficou "out of capacity"). ⚠️ É um VPS
+  **compartilhado/em produção**: já tem Docker + **Portainer** + **Traefik** (proxy reverso) e outros containers.
+  → regra **ADD-ONLY** (igual ao n8n de HML): só adicionar stack isolada, nunca tocar no que existe.
+- **Solicitação à equipe de infra criada**: [`infra/SOLICITACAO-infra-hetzner.md`](../infra/SOLICITACAO-infra-hetzner.md)
+  — Fase 1: imagem custom `canaldark-n8n` (n8n+Python+FFmpeg+repo, gera o vídeo dentro de si) publicada via labels
+  Traefik em `n8n.<DOMINIO>`. Fase 2 (se a RAM permitir): Postiz. Inclui Dockerfile + stack do Portainer.
+  **Pendente da infra:** nome da rede do Traefik, entrypoint/certresolver, subdomínios e `nproc/free -h/df -h`.
+- Script de auto-retry da VM (rota Oracle, hoje em desuso): `infra/oci_retry_launch.py`.
 
 ## Backlog
 
@@ -31,9 +36,25 @@ atualizado: 2026-05-30
 - [ ] Decidir servidor: insistir Oracle free vs migrar Hetzner.
 - [ ] Postiz no mesmo host. → canal **05**.
 
-## Segredos a revogar (foram colados no chat)
+## Chaves / Segredos
 
-- API key do n8n (HML) e API key da Oracle → **revogar**.
+**Decisão do Vinicius (2026-05-31): NÃO rotacionar** as chaves vazadas. Sobrepõe a "ação pendente de
+segurança" do CLAUDE.md. ⚠️ Risco aceito: a chave do **n8n de HML da S4S** é de infra da empresa — se vazar
+de fato, é problema corporativo, não só pessoal. Mantido o registro caso mude de ideia.
+
+> Onde os valores reais vivem: `.env` (gitignored, NÃO versionado) e, no repo de trabalho
+> `C:\Users\aless\canal-dark`, também `_segredos/` (pasta gitignored). **Nunca** colar o valor de nenhuma
+> chave em doc, repo, OneDrive ou vault público.
+
+As 5 chaves em uso (todas **NÃO rotacionadas — decisão 31/05**):
+
+| # | Chave | Pra que serve | Variável no `.env` | Status |
+|---|-------|---------------|--------------------|--------|
+| 1 | **n8n HML (S4S)** | Autenticar na API do n8n de HML (`hml-editor.staff4solutions.com.br`) p/ subir/ler workflow. Infra da **empresa**. | (não está no `.env.example`; usada pelo `n8n/push_to_n8n.py`) | NÃO rotacionada (31/05) |
+| 2 | **OCI / Oracle Cloud** | Autenticar na API da Oracle p/ tentar criar a VM ARM A1 (rota de servidor, hoje em desuso). | credenciais OCI (`~/.oci`, fingerprint + chave privada) — não no `.env` | NÃO rotacionada (31/05) |
+| 3 | **Telegram bot** | Token do `@CanalDark_bot` p/ enviar/receber os 2 checkpoints humanos (roteiro + guardrail). | `TELEGRAM_BOT_TOKEN` | NÃO rotacionada (31/05) |
+| 4 | **Gemini** | Google AI Studio; LLM do roteirista/trend/guardrail. | `GEMINI_API_KEY` | NÃO rotacionada (31/05) |
+| 5 | **Pexels** | API de b-roll grátis usada pelo `short_factory.py`. | `PEXELS_API_KEY` | NÃO rotacionada (31/05) |
 
 ## Links
 

@@ -7,6 +7,9 @@ out/
 *.mp3
 *.srt
 
+# Testes de vídeo — pesados/gerados, NUNCA versionar (logs, jpgs, metadata de runs)
+video testes/
+
 # Python
 .venv/
 venv/

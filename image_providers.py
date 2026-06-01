@@ -362,8 +362,9 @@ def _prov_aihorde(query: str, count: int, style: Optional[dict] = None) -> list:
         "prompt": prompt,
         "params": {
             "width": 512,
-            "height": 512,
+            "height": 896,  # 9:16 (era 512x512 quadrado — proporção errada pro Short)
             "steps": 20,
+            "post_processing": ["RealESRGAN_x4plus"],  # upscale grátis do AI Horde → menos "borrado/IA"
         },
         "models": ["stable_diffusion"],
         "r2": True,  # retorna URL em vez de base64 (quando suportado)
@@ -538,18 +539,133 @@ def _prov_cloudflare(query: str, count: int, style: Optional[dict] = None) -> li
     )]
 
 
+def _prov_imagerouter(query: str, count: int, style: Optional[dict] = None) -> list:
+    """
+    ImageRouter — geração de imagens via roteador OpenAI-compatible.
+    Usa IMAGEROUTER_API_KEY do env. Sem chave, pula silenciosamente.
+
+    Modelo padrão: black-forest-labs/FLUX-1-schnell:free (preço $0, mas exige
+    depósito único de qualquer valor na conta — ver https://imagerouter.io/pricing).
+    O modelo pode ser sobrescrito via IMAGEROUTER_MODEL no env.
+
+    ATENÇÃO: o modelo :free retorna HTTP 403 "access_denied" se a conta não
+    tiver feito o depósito inicial. O provider retorna [] nesses casos e a
+    cascata segue para o próximo (aihorde).
+    """
+    api_key = os.environ.get("IMAGEROUTER_API_KEY", "").strip()
+    if not api_key:
+        log.info("[imagerouter] IMAGEROUTER_API_KEY não definida — pulando.")
+        return []
+
+    model = os.environ.get("IMAGEROUTER_MODEL", "black-forest-labs/FLUX-1-schnell:free").strip()
+    prompt = _build_gen_prompt(query, style)
+
+    payload = {
+        "prompt": prompt,
+        "model": model,
+        # 1024x1024 é o tamanho padrão seguro; verticais não são suportados por todos os modelos
+        "size": "1024x1024",
+        "n": 1,
+    }
+    url = "https://api.imagerouter.io/v1/openai/images/generations"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        **_HEADERS,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=_GEN_TIMEOUT)
+    except Exception as exc:
+        log.warning("[imagerouter] Erro de rede: %s", exc)
+        return []
+
+    if resp.status_code == 403:
+        try:
+            err_msg = resp.json().get("error", {}).get("message", "")
+        except Exception:
+            err_msg = resp.text[:200]
+        log.warning("[imagerouter] HTTP 403 (access_denied) — %s", err_msg[:120])
+        return []
+
+    if resp.status_code != 200:
+        log.warning("[imagerouter] HTTP %s para '%s': %s",
+                    resp.status_code, query, resp.text[:200])
+        return []
+
+    try:
+        data = resp.json()
+        images = data.get("data", [])
+        if not images:
+            log.warning("[imagerouter] Resposta sem 'data' para '%s'", query)
+            return []
+    except Exception as exc:
+        log.warning("[imagerouter] Falha ao parsear resposta: %s", exc)
+        return []
+
+    img_entry = images[0]
+    img_url = img_entry.get("url", "")
+    b64_data = img_entry.get("b64_json", "")
+
+    if b64_data:
+        import base64
+        try:
+            img_bytes = base64.b64decode(b64_data)
+        except Exception as exc:
+            log.warning("[imagerouter] Falha ao decodificar b64_json: %s", exc)
+            return []
+        return [ImageResult(
+            url=f"imagerouter://generated/{_sha1(img_bytes)[:12]}",
+            license="ai-generated",
+            attribution="",
+            source_provider="imagerouter",
+            source_url="https://imagerouter.io/",
+            bytes_data=img_bytes,
+        )]
+
+    if img_url:
+        # URL retornada — baixa o conteúdo
+        try:
+            dl = requests.get(img_url, headers=_HEADERS, timeout=_GEN_TIMEOUT)
+            dl.raise_for_status()
+            img_bytes = dl.content
+        except Exception as exc:
+            log.warning("[imagerouter] Falha ao baixar imagem gerada: %s", exc)
+            return []
+        if len(img_bytes) < 2000:
+            log.warning("[imagerouter] Imagem muito pequena (%d bytes)", len(img_bytes))
+            return []
+        return [ImageResult(
+            url=img_url,
+            license="ai-generated",
+            attribution="",
+            source_provider="imagerouter",
+            source_url="https://imagerouter.io/",
+            bytes_data=img_bytes,
+        )]
+
+    log.warning("[imagerouter] Nenhum url nem b64_json na resposta para '%s'", query)
+    return []
+
+
 def _prov_fandom(query: str, count: int) -> list:
     """
     Fandom wikis — imagens de anime/franquias (lane anime).
     ATENÇÃO: IP protegida. Marcada com needs_human_approval=True e license=UNKNOWN-IP.
+
+    Usa generator=search&gsrnamespace=6&gsrsearch=<query> (busca semântica por File:)
+    em vez de list=allimages (que era alfabética e irrelevante).
     """
     limit = max(count * 3, 5)
-    # Tenta busca genérica no onepiece.fandom.com como exemplo; query determina contexto
+    # Busca semântica por arquivos de imagem (namespace 6 = File:)
     params = {
         "action": "query",
-        "list": "allimages",
-        "aifrom": query.replace(" ", "_"),
-        "ailimit": str(limit),
+        "generator": "search",
+        "gsrsearch": query,
+        "gsrnamespace": "6",  # namespace File
+        "gsrlimit": str(limit),
+        "prop": "imageinfo",
+        "iiprop": "url",
         "format": "json",
     }
     url = "https://onepiece.fandom.com/api.php"
@@ -561,9 +677,13 @@ def _prov_fandom(query: str, count: int) -> list:
         log.warning("[fandom] Erro na busca '%s': %s", query, exc)
         return []
 
+    pages = data.get("query", {}).get("pages", {})
     results = []
-    for item in data.get("query", {}).get("allimages", []):
-        img_url = item.get("url", "")
+    for page in pages.values():
+        ii_list = page.get("imageinfo", [])
+        if not ii_list:
+            continue
+        img_url = ii_list[0].get("url", "")
         if not img_url or not any(img_url.lower().endswith(ext) for ext in _IMG_EXTS):
             continue
         results.append(ImageResult(
@@ -630,6 +750,7 @@ _PROVIDER_REGISTRY = {
     "cloudflare": _prov_cloudflare,
     "aihorde": _prov_aihorde,
     "pollinations": _prov_pollinations,
+    "imagerouter": _prov_imagerouter,
     "fandom": _prov_fandom,
     "civitai": _prov_civitai,
 }
@@ -637,9 +758,12 @@ _PROVIDER_REGISTRY = {
 # Providers padrão por lane
 _LANE_DEFAULTS = {
     "burn": ["wikimedia", "openverse", "internetarchive"],
-    # generate: Cloudflare FLUX primeiro (grátis com token, alta qualidade);
-    # cai pro Pollinations (grátis sem chave) e AI Horde (grátis, lento) se faltar/falhar.
-    "generate": ["cloudflare", "pollinations", "aihorde"],
+    # generate: cascata em ordem de qualidade/disponibilidade:
+    #   pollinations  — grátis sem chave, rápido, FLUX
+    #   cloudflare    — grátis com token CF, alta qualidade
+    #   imagerouter   — grátis com conta (depósito único), FLUX-schnell
+    #   aihorde       — grátis público, lento (fila)
+    "generate": ["pollinations", "cloudflare", "imagerouter", "aihorde"],
     "anime": [],   # só ativado via ALLOW_ANIME=1
     "ref": ["wikimedia", "internetarchive"],
 }

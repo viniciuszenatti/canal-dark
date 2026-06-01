@@ -84,6 +84,12 @@ MAX_SHORT_DURATION = 90
 # Cor de fallback quando nenhum b-roll é encontrado: preto sólido
 FALLBACK_BG_COLOR = "black"
 
+# Duração máxima por shot de b-roll em segundos.
+# Quando uma cena dura mais que isso, o shot é dividido em sub-shots
+# para evitar imagem congelada por períodos longos.
+# Configurável via env CANAL_DARK_MAX_SHOT (float, em segundos).
+DEFAULT_MAX_SHOT_SEC = 4.0
+
 # ── Configurações de legenda ──────────────────────────────────────────────────
 # Resolução base do ASS: fixada em 1080x1920 para que FontSize seja idêntico em
 # QUALQUER máquina, independentemente da resolução de exibição do ffmpeg.
@@ -261,8 +267,9 @@ def _wrap_subtitle_text(text: str, max_chars: int = SUBTITLE_MAX_CHARS_PER_LINE,
 
 SCRIPT_SYSTEM_PROMPT = """\
 You are a scriptwriter for a faceless YouTube Shorts channel targeting a global English-speaking audience. \
-Your niche is [NICHE: history, science, psychology, philosophy — choose one that fits the topic]. \
-You write SHORT narrated scripts (~90 seconds at a natural speaking pace, roughly 180–220 words total). \
+Your niche, narrator voice, and content rules are defined by the NICHE PLAYBOOK provided above this prompt. \
+Follow that playbook strictly. If NO playbook is present, infer the single most fitting angle for the given topic. \
+You write SHORT narrated scripts (~45–60 seconds at a natural speaking pace, roughly 120–150 words total). \
 
 KEY RULES:
 1. HOOK FIRST: the opening line must grab attention in ≤3 seconds. Use a surprising fact, \
@@ -283,15 +290,16 @@ Before writing the lines, define ONE global "visual_context" object that governs
 (e.g. ["true crime", "night"] — will be injected into every Pexels search)
   - avoid_terms: list of topics that must NEVER appear (e.g. ["lake","beach","wildlife"])
 
-4. BROLL QUERIES — each broll_query must be SYMBOLIC, not literal:
-  - Use 2-4 CONCRETE keywords of PLACE / OBJECT / ATMOSPHERE — ONE scene per query
+4. BROLL QUERIES — each broll_query is 2-4 CONCRETE keywords for ONE scene:
+  - Keywords of PLACE / OBJECT / ATMOSPHERE; you MAY name a real place, event or public figure \
+directly when that would return relevant footage (copyright is not a constraint here).
   - NO commas, NO lists, NO full sentences — space-separated keywords only
-  - NEVER describe a specific real person (no name, hair color, age, gender, "the killer") — \
-represent a person via environment / objects / anonymous silhouette from behind / hands only
   - Must be coherent with visual_context (setting, era, mood)
   - Avoid bare nouns that pull off-topic ("police" alone, "light", "water") — \
 qualify in scene context ("crime scene investigation at night")
-  - BAD example: "police flashlight investigation, untouched cash drawer, quiet guard dog"
+  - Practical tip: stock libraries (Pexels) rarely hold footage of one specific private person, so a \
+symbolic place/object query often returns better results there; name directly for famous landmarks/events \
+or when the b-roll is AI-generated.
   - GOOD example: "crime scene investigation at night"
 
 5. HUMAN REVIEW: this script will be reviewed and edited by a human before production. \
@@ -319,8 +327,8 @@ OUTPUT FORMAT — return ONLY a valid JSON object, no markdown fences, no explan
 }
 
 The "hook" MUST also appear as the first item in "lines" (so it gets voice + b-roll treatment).
-Total spoken text (hook + all lines.text + cta) must be 180–220 words. \
-Aim for 6–10 lines.\
+Total spoken text (hook + all lines.text + cta) must be 120–150 words. \
+Aim for 6–8 lines.\
 """
 
 
@@ -606,52 +614,98 @@ def _synthesize_elevenlabs(text: str, voice: str, out_path: Path) -> Path:
 
 def generate_srt_from_edge_tts(text: str, voice: str, srt_path: Path, mp3_path: Path) -> Path:
     """
-    Gera um arquivo .srt com timestamps por palavra usando o SubMaker do edge-tts.
-    O SubMaker captura os eventos 'boundary' do SSML — cada palavra com offset preciso.
+    Gera legendas com timestamps por palavra usando eventos WordBoundary do edge-tts.
 
-    Retorna o path do .srt gerado.
+    Quando SUB_STYLE=karaoke (padrão), escreve um .ass nativo com realce por palavra.
+    Para clean/punchy, escreve o .srt tradicional.
+
+    Retorna o path do arquivo de legenda gerado (.srt ou .ass).
     """
     try:
         import edge_tts
-        from edge_tts import SubMaker
+        from edge_tts import SubMaker  # noqa: F401 (import mantido p/ compatibilidade)
     except ImportError:
         log.error("edge-tts não instalado. Execute: pip install edge-tts")
         sys.exit(1)
 
-    log.info("Gerando SRT com timestamps via SubMaker do edge-tts...")
+    sub_style = os.environ.get("SUB_STYLE", "karaoke").strip().lower()
+    log.info("Gerando legenda (SUB_STYLE=%s) com timestamps via edge-tts...", sub_style)
 
     async def _run():
         communicate = edge_tts.Communicate(text, voice)
 
-        # Acumula áudio + eventos de palavra (start/end em segundos)
+        # Acumula áudio + eventos de boundary (start/end em segundos).
+        # edge-tts >=7.x emite SentenceBoundary (não WordBoundary) por padrão →
+        # capturamos os dois e, se só houver sentença, interpolamos por palavra.
         audio_chunks = []
-        words = []  # (start_sec, end_sec, palavra)
+        words = []       # (start_sec, end_sec, palavra) — quando há WordBoundary
+        sentences = []   # (start_sec, end_sec, frase)   — fallback comum (7.x)
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
+            t = chunk["type"]
+            if t == "audio":
                 audio_chunks.append(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
+            elif t in ("WordBoundary", "SentenceBoundary"):
                 # offset/duration em unidades de 100ns → segundos
                 start_sec = chunk["offset"] / 10_000_000
                 end_sec = (chunk["offset"] + chunk["duration"]) / 10_000_000
-                words.append((start_sec, end_sec, chunk["text"]))
+                bucket = words if t == "WordBoundary" else sentences
+                bucket.append((start_sec, end_sec, chunk["text"]))
 
         # Salva o .mp3 reunindo os chunks de áudio
         mp3_path.write_bytes(b"".join(audio_chunks))
+
+        # Sem WordBoundary? Deriva palavras interpolando DENTRO de cada sentença
+        # (fatia de tempo proporcional ao tamanho de cada token) → sincronia por
+        # palavra suficiente p/ karaokê e SRT, ancorada no timing real da frase.
+        if not words and sentences:
+            for s_start, s_end, s_text in sentences:
+                toks = s_text.split()
+                total = sum(len(tok) for tok in toks) or 1
+                dur = max(0.0, s_end - s_start)
+                cur = s_start
+                for tok in toks:
+                    w = dur * (len(tok) / total)
+                    words.append((cur, cur + w, tok))
+                    cur += w
         return words
 
     try:
         words = asyncio.run(_run())
-        srt_content = _build_srt_from_words(words) if words else _generate_fallback_srt(text)
     except Exception as exc:
-        log.error("Erro ao gerar SRT via edge-tts: %s", exc)
+        log.error("Erro ao gerar legenda via edge-tts: %s", exc)
         log.warning("Fallback: gerando SRT aproximado sem timestamps por palavra.")
-        srt_content = _generate_fallback_srt(text)
+        srt_path.write_text(_generate_fallback_srt(text), encoding="utf-8")
+        return srt_path
 
-    # Guarda-corpo: se por qualquer motivo o SRT saiu vazio, aplica o fallback
+    # Modo karaokê: produz .ass com realce palavra-a-palavra
+    if sub_style == "karaoke" and words:
+        ass_path = srt_path.with_suffix(".ass")
+        # Precisa dos parâmetros de estilo para montar o cabeçalho do ASS.
+        # Resolve aqui (duplica a lógica de assemble_short intencionalmente —
+        # o ASS carrega o estilo embutido, então precisa saber fonte/tamanho).
+        font_name = _resolve_subtitle_font()
+        sub_pos = os.environ.get("SUB_POS", "lower").strip().lower()
+        _SUB_FONT_RATIO = float(os.environ.get("SUB_FONT_RATIO", "0.075"))
+        font_size = int(round(SUBTITLE_PLAY_RES_Y * _SUB_FONT_RATIO))
+        alignment = 5 if sub_pos == "center" else 2
+        margin_v  = 0 if sub_pos == "center" else 220
+
+        ass_content = _build_ass_karaoke(words, font_name, font_size, alignment, margin_v)
+        if not ass_content or not ass_content.strip():
+            log.warning("ASS karaokê vazio; fallback para SRT clean.")
+            srt_path.write_text(_build_srt_from_words(words) or _generate_fallback_srt(text),
+                                 encoding="utf-8")
+            return srt_path
+        ass_path.write_text(ass_content, encoding="utf-8")
+        log.info("ASS karaokê gerado: %s (%d bytes, %d palavras)",
+                 ass_path.name, len(ass_content), len(words))
+        return ass_path
+
+    # Modos clean / punchy → SRT tradicional
+    srt_content = _build_srt_from_words(words) if words else _generate_fallback_srt(text)
     if not srt_content or not srt_content.strip():
         log.warning("SRT vazio após geração; aplicando fallback estimado.")
         srt_content = _generate_fallback_srt(text)
-
     srt_path.write_text(srt_content, encoding="utf-8")
     log.info("SRT gerado: %s (%d bytes)", srt_path.name, len(srt_content))
     return srt_path
@@ -779,6 +833,155 @@ def _generate_fallback_srt(text: str) -> str:
     return "\n".join(lines)
 
 
+# ── Cor de realce karaokê (formato ASS BGR little-endian &HAABBGGRR& sem alpha)
+# Amarelo = B=0, G=255, R=255 → &H0000FFFF& (alpha=00 = opaco)
+# Configurável via env SUB_HL_COLOR (ex: SUB_HL_COLOR=&H0000FFFF& para amarelo)
+_DEFAULT_HL_COLOR = "&H0000FFFF&"
+
+
+def fmt_ass_time(seconds: float) -> str:
+    """Converte segundos (float) para o formato H:MM:SS.cc do ASS (centiseconds)."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    cs = int(round((seconds % 1) * 100))
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _build_ass_karaoke(
+    words: list,
+    font_name: str,
+    font_size: int,
+    alignment: int,
+    margin_v: int,
+) -> str:
+    """
+    Gera um arquivo ASS completo com legenda karaokê palavra-a-palavra.
+
+    Estratégia: agrupa palavras em cues (mesma lógica 'clean' do SRT) e para
+    cada cue emite:
+      - Um evento Layer=0 cobrindo toda a duração do cue: texto em branco.
+      - Um evento Layer=1 por palavra: mesmo texto do cue mas a palavra ativa
+        em amarelo (SUB_HL_COLOR) e as demais mantidas em branco, usando
+        overrides de cor inline ASS {\c&H...&}...{\r} — timing exato da palavra
+        do WordBoundary.
+    O Layer=1 sobrepõe o Layer=0 dentro da janela da palavra ativa, garantindo
+    que o viewer sempre veja o cue inteiro mas com destaque progressivo.
+
+    Parâmetros:
+      words      — lista de (start_sec, end_sec, texto) do WordBoundary
+      font_name  — nome da fonte (Montserrat SemiBold ou Arial)
+      font_size  — tamanho em pontos ASS (proporcional a PlayResY=1920)
+      alignment  — alinhamento ASS (2=inferior-centro, 5=centro)
+      margin_v   — MarginV em pixels (=0 quando center)
+    """
+    hl_color = os.environ.get("SUB_HL_COLOR", _DEFAULT_HL_COLOR).strip()
+
+    # ── Cabeçalho ASS ───────────────────────────────────────────────────────────
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {SUBTITLE_PLAY_RES_X}\n"
+        f"PlayResY: {SUBTITLE_PLAY_RES_Y}\n"
+        "ScaledBorderAndShadow: yes\n"
+        "Collisions: Normal\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{font_name},{font_size},"
+        "&H00FFFFFF&,"          # PrimaryColour: branco
+        "&H000000FF&,"          # SecondaryColour: azul (não usado no modo override)
+        "&HC0000000&,"          # OutlineColour: preto ~75% opaco
+        "&H80000000&,"          # BackColour: sombra translúcida
+        "1,"                    # Bold
+        "0,0,0,"                # Italic, Underline, StrikeOut
+        "100,100,"              # ScaleX, ScaleY
+        "0,0,"                  # Spacing, Angle
+        "1,"                    # BorderStyle: 1 = contorno+sombra
+        "3,2,"                  # Outline=3, Shadow=2
+        f"{alignment},"         # Alignment
+        f"0,0,{margin_v},"      # MarginL, MarginR, MarginV
+        "1\n"                   # Encoding: ANSI=1
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    # ── Agrupa palavras em cues (lógica 'clean') ────────────────────────────────
+    max_total_chars = SUBTITLE_MAX_CHARS_PER_LINE * SUBTITLE_MAX_LINES
+    cues: list[list] = []  # cada cue = lista de (start, end, texto) por palavra
+    i = 0
+    while i < len(words):
+        group = [words[i]]
+        group_text = words[i][2]
+        i += 1
+        while i < len(words):
+            candidate_text = group_text + " " + words[i][2]
+            if len(candidate_text) > max_total_chars:
+                break
+            group.append(words[i])
+            group_text = candidate_text
+            i += 1
+        cues.append(group)
+
+    # ── Emite eventos ASS ────────────────────────────────────────────────────────
+    dialogue_lines = []
+
+    for cue in cues:
+        cue_start = fmt_ass_time(cue[0][0])
+        cue_end   = fmt_ass_time(cue[-1][1])
+        # Texto do cue com quebra de linha ASS (\N) mas sem inline color
+        # (layer 0 = base, tudo branco)
+        base_text = _wrap_subtitle_text(" ".join(w[2] for w in cue)).replace("\n", "\\N")
+
+        # Layer 0: base — texto branco todo o cue
+        dialogue_lines.append(
+            f"Dialogue: 0,{cue_start},{cue_end},Default,,0,0,0,,{base_text}"
+        )
+
+        # Layer 1: um evento por palavra — realça somente a palavra ativa
+        for k, (w_start, w_end, w_text) in enumerate(cue):
+            # Reconstrói o texto do cue com a palavra k em destaque
+            parts = []
+            for j, (_, _, wt) in enumerate(cue):
+                if j == k:
+                    parts.append(f"{{\\c{hl_color}}}{wt}{{\\c&H00FFFFFF&}}")
+                else:
+                    parts.append(wt)
+            cue_with_hl = " ".join(parts)
+            # Mantém quebras de linha do cue original (usa _wrap_subtitle_text
+            # sem os overrides, depois reaplica nos mesmos pontos de quebra)
+            # Abordagem simples: wrap no texto sem tags, depois reinsere as tags
+            # pelo alinhamento de palavras (sem risco de quebrar tags inline).
+            raw_wrapped_words = _wrap_subtitle_text(" ".join(w[2] for w in cue)).split("\n")
+            # Remonta linha-a-linha com inline colors
+            lines_hl = []
+            word_cursor = 0
+            for line_text in raw_wrapped_words:
+                line_words_count = len(line_text.split())
+                line_parts = []
+                for ji in range(word_cursor, word_cursor + line_words_count):
+                    _, _, wt = cue[ji]
+                    if ji == k:
+                        line_parts.append(f"{{\\c{hl_color}}}{wt}{{\\c&H00FFFFFF&}}")
+                    else:
+                        line_parts.append(wt)
+                lines_hl.append(" ".join(line_parts))
+                word_cursor += line_words_count
+            hl_text = "\\N".join(lines_hl)
+
+            w_start_fmt = fmt_ass_time(w_start)
+            w_end_fmt   = fmt_ass_time(w_end)
+            dialogue_lines.append(
+                f"Dialogue: 1,{w_start_fmt},{w_end_fmt},Default,,0,0,0,,{hl_text}"
+            )
+
+    return header + "\n".join(dialogue_lines) + "\n"
+
+
 def get_audio_duration(audio_path: Path) -> float:
     """
     Retorna a duração em segundos do arquivo de áudio usando ffprobe.
@@ -811,28 +1014,48 @@ def _lane_for(vctx: Optional[dict]) -> str:
     Determina a lane de copyright para image_providers.find_images.
 
     Prioridade:
-      1. IMG_LANE env var (override explícito)
-      2. 'generate' se vctx.subject_mode sugere geração de imagem
-      3. 'anime' se ALLOW_ANIME=1 e subject_mode=='anime' (não é campo padrão, mas aceito)
-      4. default conservador: 'burn' (só licenças livres confirmadas)
+      1. IMG_STYLE=cinematic → 'generate' (override de modo cinematográfico)
+      2. IMG_LANE env var (override explícito do operador)
+      3. CANAL_DARK_NICHE → roteamento automático por nicho:
+           true-crimes / conspiracy-theories → 'burn' (Wikimedia/Openverse/IA real)
+             com 'generate' como fallback se burn não retornar resultado
+           one-piece-theories-and-stories    → 'anime' se ALLOW_ANIME=1,
+             senão 'generate' (fallback seguro)
+      4. visual_context.subject_mode=='anime' + ALLOW_ANIME=1 → 'anime'
+      5. default conservador: 'burn' (só licenças livres confirmadas)
 
     vctx é o visual_context do roteiro; pode ser None.
     """
-    # Modo cinematográfico (IA) tem PRECEDÊNCIA: gera imagens coesas a partir do
-    # visual_context em vez de banco genérico. Ligado por IMG_STYLE=cinematic.
-    # (Vem antes de IMG_LANE pra não ser sobreposto pelo IMG_LANE=burn do .env.)
+    # 1. Modo cinematográfico (IA) tem PRECEDÊNCIA: gera imagens coesas a partir do
+    #    visual_context em vez de banco genérico. Ligado por IMG_STYLE=cinematic.
+    #    (Vem antes de IMG_LANE pra não ser sobreposto pelo IMG_LANE=burn do .env.)
     if os.environ.get("IMG_STYLE", "").strip().lower() == "cinematic":
         return "generate"
 
+    # 2. Override explícito do operador
     env_lane = os.environ.get("IMG_LANE", "").strip().lower()
     if env_lane in ("burn", "generate", "anime", "ref"):
         return env_lane
 
+    # 3. Roteamento automático por nicho (CANAL_DARK_NICHE)
+    niche = os.environ.get("CANAL_DARK_NICHE", "").strip().lower()
+    if niche in ("true-crimes", "conspiracy-theories"):
+        # Imagem real prefere burn; generate é o fallback natural na cascata do
+        # image_providers quando burn não retorna resultado.
+        return "burn"
+    if niche == "one-piece-theories-and-stories":
+        if os.environ.get("ALLOW_ANIME", "0") == "1":
+            return "anime"
+        # Sem ALLOW_ANIME, gera via IA (evita IP da Toei/Shueisha)
+        return "generate"
+
+    # 4. visual_context.subject_mode=='anime' + ALLOW_ANIME=1
     if vctx:
         subject_mode = (vctx.get("subject_mode") or "").lower()
         if subject_mode == "anime" and os.environ.get("ALLOW_ANIME", "0") == "1":
             return "anime"
 
+    # 5. Default conservador
     return "burn"
 
 
@@ -1219,14 +1442,46 @@ def create_solid_color_clip(color: str, duration: float, out_path: Path) -> Path
 # (d) MONTAGEM COM FFMPEG
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _ken_burns_clip(image_path: Path, duration: float, out_path: Path) -> Path:
-    """Transforma uma imagem em clipe 9:16 com zoom lento (Ken Burns)."""
+def _ken_burns_clip(image_path: Path, duration: float, out_path: Path,
+                    variant: int = 0) -> Path:
+    """
+    Transforma uma imagem em clipe 9:16 com zoom/pan lento (Ken Burns).
+
+    variant (int): variante de movimento para evitar shots idênticos quando a
+    mesma imagem é reutilizada em sub-shots (E5 — cap de duração).
+      0 → zoom-in a partir do centro (padrão)
+      1 → zoom-in deslocando levemente para a esquerda/baixo (pan sutil)
+      2 → zoom-in a partir do canto superior-direito
+      3 → zoom-out leve (z inicia em 1.12 e decresce para 1.0)
+    """
     frames = max(1, int(round(duration * 30)))
+
+    if variant == 1:
+        # Pan: parte do centro-esquerdo e caminha para o centro
+        zoom_expr = "min(zoom+0.0010,1.12)"
+        x_expr = "iw/2-(iw/zoom/2)+iw*0.02*(1-on/in)"
+        y_expr = "ih/2-(ih/zoom/2)+ih*0.015*(1-on/in)"
+    elif variant == 2:
+        # Canto superior-direito
+        zoom_expr = "min(zoom+0.0012,1.15)"
+        x_expr = "iw*0.65-(iw/zoom/2)"
+        y_expr = "ih*0.15-(ih/zoom/2)"
+    elif variant == 3:
+        # Zoom-out: começa grande e afasta levemente
+        zoom_expr = "max(1.12-0.0012*on,1.0)"
+        x_expr = "iw/2-(iw/zoom/2)"
+        y_expr = "ih/2-(ih/zoom/2)"
+    else:
+        # Padrão (variant 0): zoom-in a partir do centro
+        zoom_expr = "min(zoom+0.0012,1.15)"
+        x_expr = "iw/2-(iw/zoom/2)"
+        y_expr = "ih/2-(ih/zoom/2)"
+
     vf = (
         f"scale={OUTPUT_WIDTH*2}:{OUTPUT_HEIGHT*2}:force_original_aspect_ratio=increase,"
         f"crop={OUTPUT_WIDTH*2}:{OUTPUT_HEIGHT*2},"
-        f"zoompan=z='min(zoom+0.0012,1.15)':d={frames}:"
-        "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"zoompan=z='{zoom_expr}':d={frames}:"
+        f"x='{x_expr}':y='{y_expr}':"
         f"s={OUTPUT_WIDTH}x{OUTPUT_HEIGHT}:fps=30,"
         "format=yuv420p"
     )
@@ -1381,16 +1636,86 @@ def assemble_short(
     # Calcula duração de cada segmento de b-roll proporcional ao número de palavras
     line_durations = compute_line_durations(script, total_duration)
 
+    # Duração máxima por shot — evita imagem congelada por períodos longos.
+    # Se uma cena durar mais que MAX_SHOT_SEC, ela é dividida em sub-shots com
+    # variações de Ken Burns (para imagens) ou cortes (para vídeos).
+    max_shot_sec = float(os.environ.get("CANAL_DARK_MAX_SHOT", str(DEFAULT_MAX_SHOT_SEC)))
+
     log.info(
-        "Montando %d segmentos de b-roll (duração total: %.1fs)",
-        len(broll_files), total_duration
+        "Montando %d segmentos de b-roll (duração total: %.1fs, max_shot=%.1fs)",
+        len(broll_files), total_duration, max_shot_sec
     )
 
-    # 1. Prepara cada clipe de b-roll na resolução e duração corretas
+    # 1. Prepara cada clipe de b-roll na resolução e duração corretas.
+    #    Quando duration > max_shot_sec, divide em sub-shots com variação de movimento.
     ready_clips: list[Path] = []
+    clip_counter = 0  # índice global de clips (para nomes únicos de arquivo)
+
     for i, (broll, duration) in enumerate(zip(broll_files, line_durations)):
-        ready = prepare_broll_segment(broll, duration, i, work_dir)
-        ready_clips.append(ready)
+        if duration <= max_shot_sec or max_shot_sec <= 0:
+            # Shot curto: comportamento normal.
+            # Para imagens, chama _ken_burns_clip com variante baseada no índice da cena.
+            # Para vídeos e None, delega a prepare_broll_segment (lógica original).
+            if broll is not None and broll.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                out_path_clip = work_dir / f"broll_ready_{clip_counter:03d}.mp4"
+                ready = _ken_burns_clip(broll, duration, out_path_clip, variant=i % 4)
+            else:
+                # prepare_broll_segment cria broll_ready_{clip_counter:02d}.mp4
+                ready = prepare_broll_segment(broll, duration, clip_counter, work_dir)
+            ready_clips.append(ready)
+            clip_counter += 1
+        else:
+            # Shot longo: divide em sub-shots de até max_shot_sec segundos
+            n_sub = int(duration / max_shot_sec) + (1 if duration % max_shot_sec > 0.1 else 0)
+            sub_dur = duration / n_sub  # distribui igualmente (pode ser ligeiramente > max)
+            log.info(
+                "B-roll cena %d (%.1fs > %.1fs): dividido em %d sub-shots de ~%.1fs",
+                i, duration, max_shot_sec, n_sub, sub_dur
+            )
+            for sub_i in range(n_sub):
+                variant = (i * 4 + sub_i) % 4  # alterna 4 variantes de Ken Burns
+                out_path_sub = work_dir / f"broll_ready_{clip_counter:03d}.mp4"
+                if broll is None:
+                    ready = create_solid_color_clip(FALLBACK_BG_COLOR, sub_dur, out_path_sub)
+                elif broll.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                    # Imagem: cada sub-shot usa uma variante diferente de Ken Burns
+                    ready = _ken_burns_clip(broll, sub_dur, out_path_sub, variant=variant)
+                else:
+                    # Vídeo: usa offset temporal diferente para cada sub-shot
+                    # (re-encodar trecho do vídeo original a partir de offset calculado)
+                    offset_sec = sub_i * sub_dur
+                    vf_sub = (
+                        f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+                        f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+                        "fps=30,"
+                        "setpts=PTS-STARTPTS"
+                    )
+                    cmd_sub = [
+                        "ffmpeg", "-y",
+                        "-ss", str(offset_sec),
+                        "-stream_loop", "-1",
+                        "-i", str(broll),
+                        "-t", str(sub_dur),
+                        "-vf", vf_sub,
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        "-pix_fmt", "yuv420p",
+                        "-r", "30",
+                        "-an",
+                        str(out_path_sub),
+                    ]
+                    res_sub = subprocess.run(cmd_sub, capture_output=True, text=True, timeout=120)
+                    if res_sub.returncode != 0:
+                        log.warning(
+                            "Sub-shot %d/%d da cena %d falhou; usando fallback.\n%s",
+                            sub_i + 1, n_sub, i, res_sub.stderr[-400:]
+                        )
+                        ready = create_solid_color_clip(FALLBACK_BG_COLOR, sub_dur, out_path_sub)
+                    else:
+                        ready = out_path_sub
+                ready_clips.append(ready)
+                clip_counter += 1
 
     # 2. Concatena todos os clipes de b-roll usando o filter_complex concat
     #    Gera um arquivo de lista para o demuxer concat do FFmpeg
@@ -1463,24 +1788,34 @@ def assemble_short(
         log.info("SUB_POS=lower: legenda no terço inferior (MarginV=%d)", margin_v)
 
     # Configuração por estilo
+    #
+    # FontSize PROPORCIONAL à altura do vídeo (PlayResY=1920):
+    #   alvo ~7.5% da altura → 7.5% * 1920 ≈ 144px
+    #   No ASS/force_style o FontSize é em "script points" onde 1pt ≈ 1px quando
+    #   PlayResY=1920. Por isso usamos 144 diretamente.
+    #   "punchy" usa 1.15× (~165px) para impacto extra sem esconder o b-roll.
+    #
+    # Referência: libass docs, "Script Info", campos PlayResX/Y e ScaledBorderAndShadow.
+    _SUB_FONT_RATIO = float(os.environ.get("SUB_FONT_RATIO", "0.075"))
+    _base_font_size = int(round(SUBTITLE_PLAY_RES_Y * _SUB_FONT_RATIO))  # ≈ 144
+
     if sub_style_env == "punchy":
-        # Punchy: poucas palavras, fonte grande para impacto visual máximo
-        # FontSize=22 em PlayResY=1920 ≈ 1.1% da altura — grande mas não abusivo
-        font_size = 22
+        # Punchy: ~15% maior que clean, poucas palavras por cue
+        font_size = int(round(_base_font_size * 1.15))
         bold = 1
-        log.info("SUB_STYLE=punchy: FontSize=%d, cues curtos de 1-3 palavras", font_size)
+        log.info("SUB_STYLE=punchy: FontSize=%d (~%.0f%% PlayResY), cues curtos de 1-3 palavras",
+                 font_size, _SUB_FONT_RATIO * 115)
         # NOTA PENDENTE: realce karaokê por palavra (\k) não implementado.
         # O edge-tts retorna timestamps por PALAVRA (WordBoundary), mas não por
         # fragmento subword. Implementar \k exigiria converter cada cue num ASS
         # nativo com eventos \k{duracao} por token — possível, mas fora do escopo
         # desta entrega. Os cues curtos já dão ritmo visual similar ao karaokê.
     else:
-        # Clean: tamanho discreto, legível, nunca domina o frame
-        # FontSize=18 em PlayResY=1920 ≈ 0.9% da altura
-        font_size = 18
+        # Clean: proporcional 7.5% → legível sem dominar o frame
+        font_size = _base_font_size
         bold = 1
-        log.info("SUB_STYLE=clean: FontSize=%d, até 2 linhas de ~%d chars", font_size,
-                 SUBTITLE_MAX_CHARS_PER_LINE)
+        log.info("SUB_STYLE=clean: FontSize=%d (~%.0f%% PlayResY), até 2 linhas de ~%d chars",
+                 font_size, _SUB_FONT_RATIO * 100, SUBTITLE_MAX_CHARS_PER_LINE)
 
     subtitle_style = (
         f"FontName={font_name},"
@@ -1490,8 +1825,8 @@ def assemble_short(
         "OutlineColour=&HC0000000,"      # contorno preto ~75% opaco
         "BackColour=&H80000000,"         # sombra translúcida
         "BorderStyle=1,"                 # 1 = contorno+sombra (NÃO caixa cheia)
-        "Outline=2,"                     # contorno um pouco mais espesso p/ legibilidade
-        "Shadow=1,"                      # sombra suave p/ destacar do fundo
+        "Outline=3,"                     # contorno espesso p/ legibilidade forte sobre b-roll
+        "Shadow=2,"                      # sombra mais pronunciada p/ destacar do fundo
         f"Alignment={alignment},"
         f"MarginV={margin_v},"
         # PlayResX/Y fixam o "canvas" virtual do libass para que FontSize seja

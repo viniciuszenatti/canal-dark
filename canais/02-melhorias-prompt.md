@@ -2,7 +2,7 @@
 projeto: canal-dark
 tipo: canal
 tema: melhorias-prompt
-atualizado: 2026-05-30
+atualizado: 2026-05-31
 ---
 
 # ✍️ Canal 02 — Melhorias de Prompt
@@ -14,24 +14,44 @@ atualizado: 2026-05-30
 
 ## Estado atual
 
-- **`SCRIPT_SYSTEM_PROMPT`** (em `short_factory.py`): roteirista de Shorts, ~180-220 palavras, hook em ≤3s,
-  UM ângulo forte, estrutura hook→contexto→insight→takeaway→CTA. Saída JSON validada.
-- **`visual_context` ("visual bible")**: o prompt obriga 1 objeto global (setting/era/mood/palette/
-  subject_mode/anchor_terms/avoid_terms) que governa TODO b-roll. `broll_query` deve ser simbólico
-  (lugar/objeto/atmosfera), nunca pessoa real nomeada — defesa de copyright + coerência visual.
-- **Injeção de nicho** (`_load_niche_context`): puxa `02-roteiro-e-linguagem.md` + `01-conteudo-e-pesquisa.md`
-  + `00-tecnicas-shorts-comum.md` do nicho ativo (`CANAL_DARK_NICHE`) pro system prompt. Roteiro em INGLÊS.
+- **`SCRIPT_SYSTEM_PROMPT`** (em `short_factory.py`): roteirista de Shorts, **~120-150 palavras / 45-60s**
+  (encurtado em **31/05** — a pesquisa da Fase 1 mostrou sweet spot 25-45s; antes era 180-220/90s), hook em ≤3s,
+  UM ângulo forte, 6-8 lines, saída JSON validada. **Nicho-agnóstico**: defere ao "NICHE PLAYBOOK" que
+  `_load_niche_context()` prefixa (puxa `02-roteiro-e-linguagem.md` + `01-conteudo-e-pesquisa.md` +
+  `00-tecnicas-shorts-comum.md` do `CANAL_DARK_NICHE`). Roteiro em INGLÊS, playbook em PT.
+- **✅ (2026-05-31) Ciclo de pesquisa de nichos concluído (Fases 1-4):**
+  - **Fase 1** — `00-tecnicas-shorts-comum.md` reescrito com técnicas de engajamento **verificadas** (cada fonte
+    com URL aberta; fato × hipótese separados): hook 0-3s, cadência de corte, loop=view, **legenda no terço
+    central** (YT tapa 400px de baixo), etc.
+  - **Fase 2** — banco `nichos/<nicho>/_referencias.md` por nicho (30 referências verificadas: criadores de
+    estilo + fontes primárias) + dossiê de gênero (ideias/tom/riscos).
+  - **Fase 3** — cada `02-roteiro-e-linguagem.md` ganhou **persona nomeada**, **beat-map → JSON**, **catálogo
+    de ganchos**, **word bank**, **regras de risco duras embutidas** e **1-2 roteiros-ouro (few-shot)**:
+    - true-crime → **The Cold File** / narrador **Marcus Vale** (`en-US-GuyNeural`)
+    - conspiracy → **The Quiet Hour** / **Silas Vance** (`en-GB-RyanNeural`)
+    - one-piece → **Poneglyph Theory** / **"Cobb"** (`en-US-AndrewNeural`) + override duro de copyright no b-roll
+  - **Fase 4** — validação **v0×v1** (mesmo tema por nicho): v1 venceu nos 3 — persona, contraponto cético
+    (conspiracy) e, crítico, **avoid_terms/b-roll limpos no one-piece** (zero personagem/anime na imagem).
+- **`visual_context` ("visual bible")**: 1 objeto global (setting/era/mood/palette/subject_mode/anchor_terms/
+  avoid_terms) governa TODO b-roll. `broll_query` simbólico (lugar/objeto/atmosfera), nunca pessoa real nomeada.
 - **Prompts auxiliares** em `prompts/`: `roteirista.md`, `trend_scout.md`, `guardrail.md` (usados no n8n).
+
+## ⚠️ Aprendizado da Fase 4 (o prompt melhora a FORMA, não garante o FATO)
+- O Gemini ainda **erra fatos** do caso (ex.: detalhes do Bear Brook) e nem sempre obedece 100% o checklist de
+  risco embutido (um roteiro vazou "children/dismembered" no true-crime). **Logo: revisão humana + fontes do
+  `_referencias.md` + guardrail continuam obrigatórios** — não são opcionais.
+- O modelo ainda **estica a duração** às vezes (conspiracy saiu 9 lines). Aceitável; apertar se incomodar.
 
 ## Backlog
 
-- [ ] **Persona nomeada por nicho** (anti "inauthentic content"): dar nome/voz consistente ao narrador.
-- [ ] **Few-shot por nicho**: incluir 1-2 exemplos de roteiro-ouro (estilo MrBallen/Ohara/LEMMiNO) no prompt.
+- [x] **Persona nomeada por nicho** (anti "inauthentic content") — feito na Fase 3 (3 personas).
+- [x] **Few-shot por nicho** — feito (1-2 roteiros-ouro por nicho no `02-roteiro`).
 - [ ] **Guardrail mais fino**: alinhar dimensões (misinformation, sensitive, platform_policy) às regras
-      duras de cada nicho (ex.: conspiracy NUNCA saúde/eleição/negação; true-crime "alleged").
+      duras de cada nicho — e checar especificamente o que o prompt não garante (menor/gore no true-crime;
+      "confirmed" sem capítulo no one-piece; desinformação no conspiracy).
 - [ ] **broll_query → query de imagem real**: quando o tema tem pessoa/evento real, gerar termo de busca
-      pra Wikimedia/Openverse (handoff p/ canal **01**), mantendo a regra de não nomear no b-roll genérico.
-- [ ] Medir: roteiro do prompt atual vs versão com few-shot — retenção/qualidade.
+      pra Wikimedia/Openverse (handoff p/ canal **01**).
+- [ ] (opcional) Apertar a duração se o modelo estourar 6-8 lines com frequência.
 
 ## Princípio
 
@@ -40,4 +60,4 @@ O prompt é o ativo mais barato de melhorar e o de maior alavanca. Roteiro únic
 ## Links
 
 Nicho ativo → [[04-nicho-decisao]]. Uso do `visual_context` no b-roll → [[01-melhorias-video]].
-Guardrail no fluxo → [[06-infra-n8n-servidor]].
+Guardrail no fluxo → [[06-infra-n8n-servidor]]. Bancos por nicho → `nichos/<nicho>/_referencias.md`.
