@@ -35,6 +35,15 @@ atualizado: 2026-05-31
 - **`visual_context` ("visual bible")**: 1 objeto global (setting/era/mood/palette/subject_mode/anchor_terms/
   avoid_terms) governa TODO b-roll. `broll_query` simbólico (lugar/objeto/atmosfera), nunca pessoa real nomeada.
 - **Prompts auxiliares** em `prompts/`: `roteirista.md`, `trend_scout.md`, `guardrail.md` (usados no n8n).
+- **✅ (2026-06-02) `broll_kind` por shot — SÓ one-piece (handoff p/ canal 01):** cada item de `lines[]` agora
+  carrega `broll_kind ∈ {character, scenery, object}` pra metade 2 rotear a FONTE da imagem (character → render
+  IA FLUX; scenery/object → pode foto real PD/CC). Regra dura + lista de IP no `06-visual-broll.md`. Validação
+  em `_parse_and_validate_script` é **niche-gated** (só roda no one-piece; ausente/inválido → `character`) + **rede
+  de segurança** `OP_IP_TOKENS`: se o `broll_query` nomeia ícone IP (Poneglyph, Thousand Sunny, brasão WG…), força
+  `character` mesmo que o LLM diga scenery/object. Campo NÃO existe nos outros nichos. Antes/depois e contrato no
+  report da sessão. **Reforça o aprendizado Fase 4:** em amostras o Gemini ora emitia o campo com 1-2 erros pro
+  lado inseguro (Poneglyph→object), ora omitia tudo — em ambos os casos o resultado é seguro (default+net=`character`),
+  mas casos estilizados/ambíguos (ex.: "D" inicial em tábua) ainda precisam do humano no Checkpoint #1.
 
 ## ⚠️ Aprendizado da Fase 4 (o prompt melhora a FORMA, não garante o FATO)
 - O Gemini ainda **erra fatos** do caso (ex.: detalhes do Bear Brook) e nem sempre obedece 100% o checklist de
