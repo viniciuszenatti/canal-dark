@@ -648,6 +648,173 @@ def _prov_imagerouter(query: str, count: int, style: Optional[dict] = None) -> l
     return []
 
 
+def _prov_fandom_pageimage(title: str, out_dir: Path) -> Optional[Path]:
+    """
+    Fandom (One Piece wiki) — infobox do personagem via prop=pageimages.
+
+    Tenta baixar a imagem principal da página do personagem a partir de variações
+    do título: como veio, com espaços→"_", e Title_Case.
+    Retorna Path do arquivo salvo em out_dir, ou None se não encontrar.
+
+    ATENÇÃO: IP protegida (Toei/Shueisha). Usar apenas com ALLOW_ANIME=1 e
+    revisão humana obrigatória.
+    """
+    if os.environ.get("ALLOW_ANIME", "0") != "1":
+        return None
+
+    # Monta variações do título para tentar
+    def _variants(t: str):
+        seen = set()
+        for v in (
+            t,
+            t.replace(" ", "_"),
+            t.title().replace(" ", "_"),
+            t.title(),
+        ):
+            if v and v not in seen:
+                seen.add(v)
+                yield v
+
+    api_url = "https://onepiece.fandom.com/api.php"
+
+    for variant in _variants(title):
+        params = {
+            "action": "query",
+            "prop": "pageimages",
+            "titles": variant,
+            "piprop": "original|thumbnail",
+            "pithumbsize": "800",
+            "format": "json",
+            "redirects": "1",
+        }
+        try:
+            resp = requests.get(api_url, params=params, headers=_HEADERS, timeout=_HTTP_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            log.debug("[fandom_pageimage] Erro ao buscar '%s': %s", variant, exc)
+            continue
+
+        pages = data.get("query", {}).get("pages", {})
+        for page in pages.values():
+            # Pula página inexistente (missing=-1)
+            if page.get("missing") is not None:
+                continue
+            img_url = ""
+            original = page.get("original", {})
+            thumbnail = page.get("thumbnail", {})
+            img_url = original.get("source") or thumbnail.get("source") or ""
+            if not img_url:
+                continue
+            # URLs do Fandom têm formato: .../Char.png/revision/latest?cb=...
+            # A extensão pode não estar no fim — verificamos se aparece em qualquer
+            # parte do path (antes do primeiro "?").
+            url_path = img_url.lower().split("?")[0]
+            if not any(ext in url_path for ext in _IMG_EXTS):
+                log.debug("[fandom_pageimage] URL ignorada (não imagem): %s", img_url[:80])
+                continue
+
+            # Baixa a imagem
+            try:
+                dl = requests.get(img_url, headers=_HEADERS, timeout=_HTTP_TIMEOUT)
+                dl.raise_for_status()
+                img_bytes = dl.content
+            except Exception as exc:
+                log.warning("[fandom_pageimage] Falha ao baixar '%s': %s", img_url[:80], exc)
+                continue
+
+            if len(img_bytes) < 2048:
+                continue
+
+            # Salva no out_dir
+            out_dir.mkdir(parents=True, exist_ok=True)
+            slug = re.sub(r"[^a-zA-Z0-9_-]", "_", variant)[:40]
+            dest = out_dir / f"fandom_char_{slug}.jpg"
+            dest.write_bytes(img_bytes)
+            log.info(
+                "[fandom_pageimage] Personagem '%s' → %s (%.1f KB)",
+                variant, dest.name, len(img_bytes) / 1024,
+            )
+            return dest
+
+    log.debug("[fandom_pageimage] Sem imagem para '%s' (e variações)", title)
+    return None
+
+
+def _prov_safebooru(tag: str, out_dir: Path) -> Optional[Path]:
+    """
+    Safebooru (Danbooru) — imagens de anime por tag (lane anime).
+
+    GET https://safebooru.donmai.us/posts.json?tags={tag}&limit=5
+    tag = nome em minúsculo com "_" (ex: "nerona_imu").
+    Retorna o primeiro post com file_url de imagem (jpg/png/webp).
+
+    ATENÇÃO: Safebooru usa Cloudflare e pode retornar 403 com requests simples
+    sem cookies. O provider retorna None nesses casos e o pipeline cai no fluxo
+    atual (civitai/pollinations).
+
+    Conteúdo é fanart — IP protegida. needs_human_approval=True implícito.
+    Usar apenas com ALLOW_ANIME=1.
+    """
+    if os.environ.get("ALLOW_ANIME", "0") != "1":
+        return None
+
+    slug = tag.lower().replace(" ", "_")
+    params = {"tags": slug, "limit": "5"}
+    api_url = "https://safebooru.donmai.us/posts.json"
+
+    headers_sb = {
+        **_HEADERS,
+        "Accept": "application/json",
+    }
+    try:
+        resp = requests.get(api_url, params=params, headers=headers_sb, timeout=_HTTP_TIMEOUT)
+        if resp.status_code in (403, 503):
+            log.warning("[safebooru] HTTP %s (Cloudflare bloqueou) para tag '%s'", resp.status_code, slug)
+            return None
+        resp.raise_for_status()
+        posts = resp.json()
+    except Exception as exc:
+        log.warning("[safebooru] Erro para tag '%s': %s", slug, exc)
+        return None
+
+    if not isinstance(posts, list):
+        log.debug("[safebooru] Resposta inesperada para '%s'", slug)
+        return None
+
+    for post in posts:
+        file_url = post.get("file_url", "")
+        if not file_url:
+            continue
+        ext = file_url.lower().split("?")[0].rsplit(".", 1)[-1]
+        if f".{ext}" not in _IMG_EXTS:
+            continue
+
+        try:
+            dl = requests.get(file_url, headers=headers_sb, timeout=_HTTP_TIMEOUT)
+            dl.raise_for_status()
+            img_bytes = dl.content
+        except Exception as exc:
+            log.warning("[safebooru] Falha ao baixar '%s': %s", file_url[:80], exc)
+            continue
+
+        if len(img_bytes) < 2048:
+            continue
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", slug)[:40]
+        dest = out_dir / f"safebooru_{safe_slug}.jpg"
+        dest.write_bytes(img_bytes)
+        log.info(
+            "[safebooru] Tag '%s' → %s (%.1f KB, post_id=%s)",
+            slug, dest.name, len(img_bytes) / 1024, post.get("id", "?"),
+        )
+        return dest
+
+    log.debug("[safebooru] Sem imagem para tag '%s'", slug)
+    return None
+
+
 def _prov_fandom(query: str, count: int) -> list:
     """
     Fandom wikis — imagens de anime/franquias (lane anime).
@@ -785,8 +952,13 @@ def _resolve_providers(lane: str) -> list:
         else:
             names = list(_LANE_DEFAULTS.get(lane, []))
 
-    # lane anime: adiciona fandom/civitai apenas se ALLOW_ANIME=1
-    if lane == "anime" and os.environ.get("ALLOW_ANIME", "0") == "1":
+    # lane anime: HARD GATE. Só existe com ALLOW_ANIME=1; caso contrário a lane é VAZIA
+    # mesmo que IMG_PROVIDERS_ANIME esteja setado no .env (defesa em profundidade — frames
+    # booru/anime reais são Content ID Toei/Shueisha e ficam OFF por padrão). One-piece usa
+    # a lane 'burn' (foto livre p/ cenário) + render IA, nunca esta.
+    if lane == "anime":
+        if os.environ.get("ALLOW_ANIME", "0") != "1":
+            return []
         if not names:
             names = ["fandom", "civitai"]
 

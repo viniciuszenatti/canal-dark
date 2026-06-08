@@ -52,6 +52,10 @@ Before writing the lines, define ONE global "visual_context" object that governs
   - Avoid bare nouns that pull off-topic ("police" alone, "light", "water") — qualify in scene context
   - BAD example: "police flashlight investigation, untouched cash drawer, quiet guard dog"
   - GOOD example: "crime scene investigation at night"
+  - broll_kind (OPTIONAL — emit it ONLY if the NICHE PLAYBOOK asks for it; otherwise omit the field):
+    machine-readable tag for the shot's source routing. Values: "character" (IP subject -> AI-rendered),
+    "scenery" (real/generic world) or "object" (common real-world prop, not IP). Follow the playbook's rules.
+    When unsure, use "character" (safe side). Today only the one-piece niche requests this field.
 
 5. HUMAN REVIEW: this script will be reviewed and edited by a human before production.
    Write with a clear perspective so the reviewer can agree/disagree and refine.
@@ -72,6 +76,7 @@ OUTPUT FORMAT — return ONLY a valid JSON object, no markdown fences, no explan
   },
   "lines": [
     {"text": "<sentence or two>", "broll_query": "<2-4 keywords ONE scene no commas>"},
+    // add "broll_kind": "character|scenery|object" to each line ONLY if the NICHE PLAYBOOK asks for it
     ...
   ],
   "cta": "<call to action — 1 short sentence, conversational>",

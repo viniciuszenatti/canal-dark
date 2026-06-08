@@ -90,6 +90,16 @@ FALLBACK_BG_COLOR = "black"
 # Configurável via env CANAL_DARK_MAX_SHOT (float, em segundos).
 DEFAULT_MAX_SHOT_SEC = 4.0
 
+# Stop-words ignoradas ao escolher a palavra-chave do punch-in (Frente C).
+# São funções gramaticais de baixa carga — nunca o clímax da frase.
+_PUNCH_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at", "for",
+    "is", "was", "are", "were", "be", "been", "it", "its", "this", "that",
+    "with", "as", "by", "from", "he", "she", "they", "you", "we", "i", "his",
+    "her", "their", "your", "our", "my", "so", "if", "then", "than", "not",
+    "no", "do", "did", "had", "has", "have", "will", "would", "can", "could",
+}
+
 # ── Configurações de legenda ──────────────────────────────────────────────────
 # Resolução base do ASS: fixada em 1080x1920 para que FontSize seja idêntico em
 # QUALQUER máquina, independentemente da resolução de exibição do ffmpeg.
@@ -107,8 +117,10 @@ SUBTITLE_MAX_CHARS_PER_LINE = 30
 SUBTITLE_MAX_LINES = 2
 
 # Fonte preferida (colocar Montserrat-SemiBold.ttf em assets/fonts/ ao lado do script).
-# Se não encontrada, cai para SUBTITLE_FONT_FALLBACK sem erro silencioso.
+# Segunda opção: BebasNeue-Regular.ttf (já inclusa em assets/fonts/ — look "punchy").
+# Se nenhuma encontrada, cai para SUBTITLE_FONT_FALLBACK sem erro silencioso.
 SUBTITLE_FONT_PREFERRED = "Montserrat SemiBold"
+SUBTITLE_FONT_BEBAS = "Bebas Neue"
 SUBTITLE_FONT_FALLBACK = "Arial"
 
 # Pasta de fontes local (ao lado deste script)
@@ -134,6 +146,17 @@ PEOPLE_WORDS = [
     "prisoner", "prisoners", "convict", "convicts",
     "model", "models", "girl", "girls", "boy", "boys",
     "guy", "guys", "lady", "ladies",
+]
+
+# One Piece — ícones que PARECEM objeto/cenário mas são IP da Toei/Shueisha e
+# precisam SEMPRE ser render IA (broll_kind='character'). Rede de segurança: se o
+# broll_query contém um destes tokens, o validador promove a linha pra 'character'
+# mesmo que o LLM tenha rotulado scenery/object (o modelo erra pro lado inseguro).
+# Tokens em minúsculo; match por substring no broll_query (cobre plural simples).
+OP_IP_TOKENS = [
+    "poneglyph", "devil fruit", "jolly roger", "thousand sunny", "going merry",
+    "oro jackson", "straw hat", "world government symbol", "world government emblem",
+    "world government flag", "marine flag", "one piece treasure",
 ]
 
 
@@ -187,13 +210,13 @@ def fmt_srt_time(seconds: float) -> str:
 
 def _resolve_subtitle_font() -> str:
     """
-    Verifica se Montserrat SemiBold está disponível em assets/fonts/.
-    Loga qual fonte foi escolhida para que seja fácil auditar em CI/produção.
-    Retorna o nome da fonte para uso no force_style do FFmpeg.
+    Resolve a fonte de legenda em ordem de preferência:
+      1. Montserrat SemiBold (Montserrat*.ttf em assets/fonts/)
+      2. Bebas Neue          (BebasNeue*.ttf em assets/fonts/) — look punchy
+      3. Arial               (fallback do sistema)
 
-    Busca por qualquer .ttf com 'montserrat' no nome (case-insensitive) em
-    ASSETS_FONTS_DIR. Se encontrar, instrui o filtro subtitles a usar
-    fontsdir=<pasta>; se não, usa Arial e loga aviso claro.
+    Loga qual fonte foi escolhida para auditar em CI/produção.
+    Retorna o nome da fonte para uso no force_style do FFmpeg.
     """
     if ASSETS_FONTS_DIR.exists():
         ttf_files = list(ASSETS_FONTS_DIR.glob("*.ttf")) + list(ASSETS_FONTS_DIR.glob("*.TTF"))
@@ -201,11 +224,14 @@ def _resolve_subtitle_font() -> str:
             if "montserrat" in ttf.name.lower():
                 log.info("Fonte de legenda: %s (Montserrat encontrada em assets/fonts/)", ttf.name)
                 return SUBTITLE_FONT_PREFERRED
+        for ttf in ttf_files:
+            if "bebasneue" in ttf.name.lower() or "bebas" in ttf.name.lower():
+                log.info("Fonte de legenda: %s (Bebas Neue encontrada em assets/fonts/)", ttf.name)
+                return SUBTITLE_FONT_BEBAS
     log.warning(
-        "Montserrat NAO encontrada em %s. "
+        "Nenhuma fonte personalizada encontrada em %s (procurou Montserrat e Bebas Neue). "
         "Usando fallback '%s'. "
-        "Para usar Montserrat: baixe Montserrat-SemiBold.ttf de "
-        "https://fonts.google.com/specimen/Montserrat e salve em assets/fonts/.",
+        "Para usar Bebas Neue: arquivo BebasNeue-Regular.ttf já deve estar em assets/fonts/.",
         ASSETS_FONTS_DIR, SUBTITLE_FONT_FALLBACK
     )
     return SUBTITLE_FONT_FALLBACK
@@ -301,6 +327,16 @@ qualify in scene context ("crime scene investigation at night")
 symbolic place/object query often returns better results there; name directly for famous landmarks/events \
 or when the b-roll is AI-generated.
   - GOOD example: "crime scene investigation at night"
+  - broll_kind (OPTIONAL — emit it ONLY if the NICHE PLAYBOOK above asks for it; otherwise omit the field): \
+a machine-readable tag for WHAT the shot depicts, so the pipeline can route the image source. \
+Allowed values: "character" (an IP / copyrighted subject that MUST be AI-rendered), "scenery" \
+(real or generic world: sea, storm, sky, lighthouse, forest, mountain, snow, generic ruins, generic island, cave) \
+or "object" (a common real-world prop/texture that is NOT IP: wood, fire, iron chain, a generic old map, \
+parchment, torches, stone). Follow the playbook's mapping rules exactly. \
+Examples: "Loki roars" -> character; "a storm over the ancient sea" -> scenery; "an old map / iron chains" -> object. \
+ALWAYS "character" (even if it looks like an object/scenery) for any recognizable IP icon: a Poneglyph, \
+a Devil Fruit, a Jolly Roger, the World Government symbol/emblem, a named ship (Thousand Sunny...), \
+the One Piece treasure, the straw hat. WHEN IN DOUBT, use "character" (the safe side against copyright claims).
 
 5. HUMAN REVIEW: this script will be reviewed and edited by a human before production. \
    Write with a clear perspective so the reviewer can agree/disagree and refine.
@@ -320,6 +356,7 @@ OUTPUT FORMAT — return ONLY a valid JSON object, no markdown fences, no explan
   },
   "lines": [
     {"text": "<sentence or two>", "broll_query": "<2-4 keywords ONE scene no commas>"},
+    // add "broll_kind": "character|scenery|object" to each line ONLY if the NICHE PLAYBOOK asks for it
     ...
   ],
   "cta": "<call to action — 1 short sentence, conversational>",
@@ -339,7 +376,11 @@ def _load_niche_context() -> str:
         return ""
     base = Path(__file__).resolve().parent / "nichos"
     parts = []
-    for rel in (f"{niche}/02-roteiro-e-linguagem.md",
+    # 06-visual-broll.md (quando existe — hoje só o one-piece tem) é o PLAYBOOK VISUAL:
+    # ensina o roteirista a emitir broll_query = SUBJECT+ACTION+EMOTION e o visual_context
+    # com as âncoras do estilo anime. Carregado 1º pra ancorar o restante do contexto.
+    for rel in (f"{niche}/06-visual-broll.md",
+                f"{niche}/02-roteiro-e-linguagem.md",
                 f"{niche}/01-conteudo-e-pesquisa.md",
                 "00-tecnicas-shorts-comum.md"):
         p = base / rel
@@ -500,10 +541,56 @@ def _parse_and_validate_script(raw: str) -> dict:
     else:
         vctx["avoid_terms"] = []
 
-    # subject_mode: apenas valores válidos
+    # subject_mode: apenas valores válidos. O one-piece pode declarar "characters"
+    # (personagens/ícones em estilo anime) — os outros nichos NÃO viram estilo anime,
+    # então pra eles "characters" cai no default seguro 'places'.
     valid_modes = {"places", "objects", "atmosphere"}
+    niche = os.environ.get("CANAL_DARK_NICHE", "").strip().lower()
+    if niche == "one-piece-theories-and-stories":
+        valid_modes = valid_modes | {"characters"}
     if vctx.get("subject_mode") not in valid_modes:
         vctx["subject_mode"] = "places"
+
+    # shot_type / camera (v4, opcionais): só o one-piece usa pra escolher o SHOT/CAMERA
+    # do render IA. Normaliza pra str enxuta; outros nichos ignoram (não tocam o estilo).
+    if niche == "one-piece-theories-and-stories":
+        for k in ("shot_type", "camera"):
+            v = vctx.get(k)
+            vctx[k] = str(v).strip()[:60] if isinstance(v, str) and v.strip() else ""
+
+    # broll_kind por linha (SÓ one-piece): rotula cada shot como character|scenery|object
+    # pra metade 2 do pipeline rotear a fonte da imagem (character -> render IA FLUX;
+    # scenery/object -> pode foto real PD/CC). Default seguro = "character" (força IA contra
+    # Content ID Toei/Shueisha). NÃO introduzir esse campo nos outros nichos.
+    if niche == "one-piece-theories-and-stories":
+        valid_kinds = {"character", "scenery", "object"}
+        n_fixed = 0      # ausente/inválido -> character
+        n_promoted = 0   # IP no broll_query -> forçado a character
+        for line in script["lines"]:
+            kind = str(line.get("broll_kind", "")).strip().lower()
+            if kind not in valid_kinds:
+                kind = "character"  # ausente/inválido -> lado seguro (IA)
+                n_fixed += 1
+            # Rede de segurança contra Content ID: se a query nomeia um ícone IP
+            # (Poneglyph, Devil Fruit, navio nomeado...), força 'character' mesmo
+            # que o LLM tenha dito scenery/object. O modelo tende a errar pro lado
+            # inseguro nesses casos-armadilha (visto em amostra). Validador > prompt.
+            if kind != "character":
+                q = str(line.get("broll_query", "")).lower()
+                if any(tok in q for tok in OP_IP_TOKENS):
+                    kind = "character"
+                    n_promoted += 1
+            line["broll_kind"] = kind
+        if n_fixed:
+            log.warning(
+                "broll_kind: %d/%d linha(s) sem valor válido -> default seguro 'character' (força render IA).",
+                n_fixed, len(script["lines"]),
+            )
+        if n_promoted:
+            log.warning(
+                "broll_kind: %d linha(s) com ícone IP na query promovida(s) a 'character' (anti Content ID).",
+                n_promoted,
+            )
 
     log.info(
         "Roteiro carregado: '%s' (%d linhas) | setting='%s' mode='%s' anchors=%s",
@@ -612,6 +699,54 @@ def _synthesize_elevenlabs(text: str, voice: str, out_path: Path) -> Path:
     return out_path
 
 
+# Nome do arquivo onde persistimos os word-timestamps do edge-tts dentro do work_dir.
+WORDS_JSON_NAME = "words.json"
+
+
+def _persist_word_timestamps(words, work_dir: Path) -> None:
+    """
+    Salva a lista de word-timestamps do edge-tts em <work_dir>/words.json.
+
+    Cada item de `words` é uma tupla (start_sec, end_sec, palavra). Persistimos
+    como lista de objetos {"start","end","text"} p/ a montagem reaproveitar a
+    cadência real da fala (casar fim das linhas + punch-in). É best-effort:
+    qualquer falha vira só um warning (o pipeline cai no fallback por contagem
+    de palavras). NÃO entra em out público — vive no _work, descartável.
+    """
+    try:
+        if not words:
+            return
+        payload = [
+            {"start": float(s), "end": float(e), "text": str(t)}
+            for (s, e, t) in words
+        ]
+        (work_dir / WORDS_JSON_NAME).write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        log.info("Word-timestamps persistidos: %s (%d palavras)", WORDS_JSON_NAME, len(payload))
+    except Exception as exc:  # noqa: BLE001 — best-effort, não pode quebrar o TTS
+        log.warning("Não consegui persistir word-timestamps (%s); seguirá por aproximação.", exc)
+
+
+def _load_word_timestamps(work_dir: Path):
+    """
+    Lê <work_dir>/words.json de volta como lista de tuplas (start, end, texto).
+
+    Retorna [] se o arquivo não existir ou estiver corrompido (a montagem então
+    cai no fallback por contagem de palavras — proteção anti-quebra).
+    """
+    try:
+        path = work_dir / WORDS_JSON_NAME
+        if not path.exists():
+            return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [(float(d["start"]), float(d["end"]), str(d["text"])) for d in data]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Não consegui ler %s (%s); usando aproximação por palavras.", WORDS_JSON_NAME, exc)
+        return []
+
+
 def generate_srt_from_edge_tts(text: str, voice: str, srt_path: Path, mp3_path: Path) -> Path:
     """
     Gera legendas com timestamps por palavra usando eventos WordBoundary do edge-tts.
@@ -676,6 +811,12 @@ def generate_srt_from_edge_tts(text: str, voice: str, srt_path: Path, mp3_path: 
         log.warning("Fallback: gerando SRT aproximado sem timestamps por palavra.")
         srt_path.write_text(_generate_fallback_srt(text), encoding="utf-8")
         return srt_path
+
+    # Persiste os word-timestamps reais (start/end/palavra) em words.json no work_dir.
+    # A montagem (assemble_short) lê esse arquivo para casar o FIM de cada linha com a
+    # fala real (cadência) e para o punch-in na palavra-chave. NÃO vai pro out público:
+    # fica ao lado do .srt dentro de _work, que é descartável/regenerável.
+    _persist_word_timestamps(words, srt_path.parent)
 
     # Modo karaokê: produz .ass com realce palavra-a-palavra
     if sub_style == "karaoke" and words:
@@ -910,8 +1051,10 @@ def _build_ass_karaoke(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
 
-    # ── Agrupa palavras em cues (lógica 'clean') ────────────────────────────────
-    max_total_chars = SUBTITLE_MAX_CHARS_PER_LINE * SUBTITLE_MAX_LINES
+    # ── Agrupa palavras em cues CURTOS (estilo Shorts) ──────────────────────────
+    # Cues curtos = poucas palavras na tela por vez, troca rápida, 1–2 linhas.
+    # Evita a "parede de texto" (parágrafo inteiro de uma vez).
+    max_total_chars = int(os.environ.get("SUB_KARAOKE_MAX_CHARS", "28"))
     cues: list[list] = []  # cada cue = lista de (start, end, texto) por palavra
     i = 0
     while i < len(words):
@@ -927,57 +1070,54 @@ def _build_ass_karaoke(
             i += 1
         cues.append(group)
 
-    # ── Emite eventos ASS ────────────────────────────────────────────────────────
-    dialogue_lines = []
+    white = "&H00FFFFFF&"
 
+    # ── Emite UM evento por cue, com karaokê NATIVO \kf ─────────────────────────
+    # Por que mudou: o design antigo usava 2 camadas (base branca + 1 evento por
+    # palavra com pop de escala 128%). Ao escalar a palavra ativa, a LARGURA da
+    # linha mudava e o libass RE-CENTRALIZAVA a linha → cada palavra aparecia 2x
+    # com leve deslocamento ("ddestruction", "cconflict") = texto fantasma. Além
+    # disso, eventos de palavra de cues vizinhos se sobrepunham no tempo e
+    # empilhavam (parede de 5 linhas).
+    #
+    # Solução: 1 único Dialogue por cue. O karaokê nativo \kf preenche cada
+    # palavra de branco→destaque conforme é narrada (sweep), SEM mexer na
+    # geometria (sem re-centralização, sem fantasma). Cues não se sobrepõem no
+    # tempo (são consecutivos) → sem empilhamento.
+    dialogue_lines = []
     for cue in cues:
         cue_start = fmt_ass_time(cue[0][0])
         cue_end   = fmt_ass_time(cue[-1][1])
-        # Texto do cue com quebra de linha ASS (\N) mas sem inline color
-        # (layer 0 = base, tudo branco)
-        base_text = _wrap_subtitle_text(" ".join(w[2] for w in cue)).replace("\n", "\\N")
 
-        # Layer 0: base — texto branco todo o cue
-        dialogue_lines.append(
-            f"Dialogue: 0,{cue_start},{cue_end},Default,,0,0,0,,{base_text}"
-        )
+        # Quebra o cue em linhas por contagem de chars (sem cortar palavra),
+        # guardando o índice de cada palavra p/ anexar o \kf com a duração certa.
+        line_groups: list = [[]]
+        cur_len = 0
+        for idx, (_, _, wt) in enumerate(cue):
+            add = len(wt) + (1 if line_groups[-1] else 0)
+            if line_groups[-1] and cur_len + add > SUBTITLE_MAX_CHARS_PER_LINE:
+                line_groups.append([idx])
+                cur_len = len(wt)
+            else:
+                line_groups[-1].append(idx)
+                cur_len += add
 
-        # Layer 1: um evento por palavra — realça somente a palavra ativa
-        for k, (w_start, w_end, w_text) in enumerate(cue):
-            # Reconstrói o texto do cue com a palavra k em destaque
+        rendered_lines = []
+        for grp in line_groups:
             parts = []
-            for j, (_, _, wt) in enumerate(cue):
-                if j == k:
-                    parts.append(f"{{\\c{hl_color}}}{wt}{{\\c&H00FFFFFF&}}")
-                else:
-                    parts.append(wt)
-            cue_with_hl = " ".join(parts)
-            # Mantém quebras de linha do cue original (usa _wrap_subtitle_text
-            # sem os overrides, depois reaplica nos mesmos pontos de quebra)
-            # Abordagem simples: wrap no texto sem tags, depois reinsere as tags
-            # pelo alinhamento de palavras (sem risco de quebrar tags inline).
-            raw_wrapped_words = _wrap_subtitle_text(" ".join(w[2] for w in cue)).split("\n")
-            # Remonta linha-a-linha com inline colors
-            lines_hl = []
-            word_cursor = 0
-            for line_text in raw_wrapped_words:
-                line_words_count = len(line_text.split())
-                line_parts = []
-                for ji in range(word_cursor, word_cursor + line_words_count):
-                    _, _, wt = cue[ji]
-                    if ji == k:
-                        line_parts.append(f"{{\\c{hl_color}}}{wt}{{\\c&H00FFFFFF&}}")
-                    else:
-                        line_parts.append(wt)
-                lines_hl.append(" ".join(line_parts))
-                word_cursor += line_words_count
-            hl_text = "\\N".join(lines_hl)
+            for idx in grp:
+                w_start, w_end, wt = cue[idx]
+                dur_cs = max(1, int(round((w_end - w_start) * 100)))  # centissegundos
+                parts.append(f"{{\\kf{dur_cs}}}{wt}")
+            rendered_lines.append(" ".join(parts))
+        kara_text = "\\N".join(rendered_lines)
 
-            w_start_fmt = fmt_ass_time(w_start)
-            w_end_fmt   = fmt_ass_time(w_end)
-            dialogue_lines.append(
-                f"Dialogue: 1,{w_start_fmt},{w_end_fmt},Default,,0,0,0,,{hl_text}"
-            )
+        # Prefixo inline: primary = cor de destaque (palavra "cantada"),
+        # secondary = branco (palavra ainda não narrada). Vence o force_style do burn.
+        prefix = f"{{\\1c{hl_color}\\2c{white}}}"
+        dialogue_lines.append(
+            f"Dialogue: 0,{cue_start},{cue_end},Default,,0,0,0,,{prefix}{kara_text}"
+        )
 
     return header + "\n".join(dialogue_lines) + "\n"
 
@@ -1121,14 +1261,23 @@ def fetch_broll(
         except ImportError:
             log.warning("image_providers não disponível — seguindo para Pexels.")
 
-    # source=="image" sem resultado → fallback Pexels (se PEXELS_API_KEY existir)
+    # source=="image" sem resultado REAL → HÍBRIDO: cai na IA (Pollinations), NÃO no
+    # Pexels. Motivo: o Pexels é stock LIVE-ACTION e, enriquecido com a query, devolvia
+    # imagens DESCONEXAS (ex.: prateleira de geleia p/ "Tylenol Chicago"; turista de
+    # ski p/ "Dyatlov 1959"). A IA gera uma cena coerente a partir da própria query do
+    # roteirista ("foggy chicago street at night" → cena nevoenta de Chicago). O Pexels
+    # só entra como último recurso e apenas se IMG_ALLOW_PEXELS_FALLBACK=1.
     if source == "image":
+        log.info("image_providers sem resultado — fallback HÍBRIDO para IA (Pollinations).")
+        ai_img = _fetch_pollinations(query, out_dir, index)
+        if ai_img is not None:
+            return ai_img
         pexels_key = os.environ.get("PEXELS_API_KEY", "").strip()
-        if not pexels_key:
-            log.warning("Nenhuma imagem encontrada via image_providers e PEXELS_API_KEY não definida.")
-            return None
-        log.info("image_providers sem resultado — fallback para Pexels.")
-        return _fetch_pexels(query, out_dir, index, vctx=vctx, used_ids=used_ids)
+        if pexels_key and os.environ.get("IMG_ALLOW_PEXELS_FALLBACK", "0") == "1":
+            log.info("IA falhou — último recurso Pexels (IMG_ALLOW_PEXELS_FALLBACK=1).")
+            return _fetch_pexels(query, out_dir, index, vctx=vctx, used_ids=used_ids)
+        log.warning("Nenhuma imagem real nem IA p/ '%s' — segmento usará cor sólida.", query[:50])
+        return None
 
     if source == "pexels":
         return _fetch_pexels(query, out_dir, index, vctx=vctx, used_ids=used_ids)
@@ -1139,27 +1288,947 @@ def fetch_broll(
         sys.exit(1)
 
 
-def _fetch_pollinations(query: str, out_dir: Path, index: int) -> Optional[Path]:
-    """Gera uma imagem 9:16 grátis no Pollinations.ai (sem chave de API) para a query."""
+def _fetch_pollinations(query: str, out_dir: Path, index: int,
+                        prompt: Optional[str] = None) -> Optional[Path]:
+    """
+    Gera uma imagem 9:16 grátis no Pollinations.ai (sem chave de API).
+
+    Se `prompt` for fornecido, usa-o INTEGRAL (caso do One Piece Visual Controller,
+    que monta um prompt em estilo One Piece a partir de um SUBJECT). Senão, deriva
+    um prompt cinematográfico genérico da própria query.
+    """
     import urllib.parse
     import requests
-    prompt = f"{query}, cinematic, dramatic lighting, highly detailed"
+    import time
+    if not prompt:
+        prompt = f"{query}, cinematic, dramatic lighting, highly detailed"
     encoded = urllib.parse.quote(prompt, safe="")
-    seed = (index * 7919 + len(query)) % 1000000  # determinístico, varia por linha
+    seed = (index * 7919 + len(prompt)) % 1000000  # determinístico, varia por cena
     url = (f"https://image.pollinations.ai/prompt/{encoded}"
            f"?width=1080&height=1920&model=flux&nologo=true&seed={seed}")
     out_path = out_dir / f"broll_ai_{index:02d}.jpg"
-    log.info("Gerando b-roll por IA (Pollinations): '%s'", query[:60])
-    try:
-        r = requests.get(url, timeout=120)
-        if r.status_code != 200 or len(r.content or b"") < 1000:
-            log.warning("Pollinations falhou (status %s). Fallback.", r.status_code)
+    log.info("Gerando b-roll por IA (Pollinations): '%s'", prompt[:80])
+
+    # O tier grátis do Pollinations é RATE-LIMITED: devolve 402/429 intermitente,
+    # principalmente sob concorrência. Em vez de desistir (que deixava a cena sem
+    # imagem), tentamos de novo com backoff crescente + jitter por índice — assim a
+    # imagem quase sempre acaba saindo, mesmo gerando várias em paralelo.
+    attempts = max(1, int(os.environ.get("CANAL_DARK_AI_RETRIES", "4")))
+    backoffs = [4, 9, 18, 30]
+    for attempt in range(attempts):
+        try:
+            r = requests.get(url, timeout=120)
+            if r.status_code == 200 and len(r.content or b"") >= 1000:
+                out_path.write_bytes(r.content)
+                return out_path
+            transient = r.status_code in (402, 429, 500, 502, 503, 504)
+            if transient and attempt < attempts - 1:
+                wait = backoffs[min(attempt, len(backoffs) - 1)] + (index % 5)
+                log.warning("Pollinations status %s (tentativa %d/%d) — aguardando %ds...",
+                            r.status_code, attempt + 1, attempts, wait)
+                time.sleep(wait)
+                continue
+            log.warning("Pollinations falhou (status %s) após %d tentativa(s).",
+                        r.status_code, attempt + 1)
             return None
-        out_path.write_bytes(r.content)
-        return out_path
-    except Exception as e:
-        log.warning("Erro no Pollinations: %s. Fallback.", e)
-        return None
+        except Exception as e:
+            if attempt < attempts - 1:
+                wait = backoffs[min(attempt, len(backoffs) - 1)] + (index % 5)
+                log.warning("Erro no Pollinations: %s — retry em %ds (%d/%d).",
+                            e, wait, attempt + 1, attempts)
+                time.sleep(wait)
+                continue
+            log.warning("Erro no Pollinations: %s. Sem mais tentativas.", e)
+            return None
+    return None
+
+
+def _fetch_cloudflare(prompt: str, out_dir: Path, index: int,
+                      account: str, token: str) -> Optional[Path]:
+    """
+    Gera 1 imagem via Cloudflare Workers AI (FLUX-1-schnell) a partir de um prompt COMPLETO.
+    Tier grátis: ~10.000 neurons/dia (centenas de imagens) e SEM o rate-limit anônimo do
+    Pollinations. Pede 9:16 NATIVO (width/height, default 720x1280 — múltiplos de 8 dentro
+    do limite do FLUX schnell) pra já sair vertical; o Ken Burns só ajusta o enquadramento.
+    Override por CLOUDFLARE_IMAGE_WIDTH / CLOUDFLARE_IMAGE_HEIGHT. Retorna Path|None.
+    """
+    import requests
+    import base64
+    import time
+    model = os.environ.get("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    steps = int(os.environ.get("CLOUDFLARE_FLUX_STEPS", "6"))
+    # 9:16 NATIVO onde o provider aceita. FLUX schnell exige múltiplos de 8 e clampa o
+    # tamanho; 720x1280 é 9:16 exato e dentro do limite. Override por env se precisar.
+    cf_w = int(os.environ.get("CLOUDFLARE_IMAGE_WIDTH", "720"))
+    cf_h = int(os.environ.get("CLOUDFLARE_IMAGE_HEIGHT", "1280"))
+    out_path = out_dir / f"broll_ai_{index:02d}.jpg"
+    log.info("Gerando b-roll por IA (Cloudflare FLUX %dx%d): '%s'", cf_w, cf_h, prompt[:80])
+    attempts = max(1, int(os.environ.get("CANAL_DARK_AI_RETRIES", "4")))
+    backoffs = [3, 7, 15, 25]
+    for attempt in range(attempts):
+        try:
+            resp = requests.post(url, json={"prompt": prompt, "steps": steps,
+                                            "width": cf_w, "height": cf_h},
+                                 headers=headers, timeout=120)
+            if resp.status_code == 200:
+                ct = resp.headers.get("content-type", "")
+                if ct.startswith("image/"):
+                    img_bytes = resp.content
+                else:
+                    data = resp.json()
+                    b64 = (data.get("result") or {}).get("image", "")
+                    img_bytes = base64.b64decode(b64) if b64 else b""
+                if len(img_bytes) >= 2000:
+                    out_path.write_bytes(img_bytes)
+                    return out_path
+                log.warning("[cloudflare] resposta 200 sem imagem válida.")
+                return None
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < attempts - 1:
+                wait = backoffs[min(attempt, len(backoffs) - 1)]
+                log.warning("[cloudflare] HTTP %s (tentativa %d/%d) — aguardando %ds...",
+                            resp.status_code, attempt + 1, attempts, wait)
+                time.sleep(wait)
+                continue
+            log.warning("[cloudflare] HTTP %s: %s", resp.status_code, resp.text[:160])
+            return None
+        except Exception as exc:
+            if attempt < attempts - 1:
+                time.sleep(backoffs[min(attempt, len(backoffs) - 1)])
+                continue
+            log.warning("[cloudflare] erro: %s", exc)
+            return None
+    return None
+
+
+def _fetch_imagerouter(prompt: str, out_dir: Path, index: int,
+                       api_key: str) -> Optional[Path]:
+    """
+    Gera 1 imagem via ImageRouter (https://imagerouter.io) a partir de um prompt
+    COMPLETO. Serve de fallback quando os 2 grátis morrem: Cloudflare estoura a cota
+    diária de neurons (429) e o Pollinations vira pago (402). Diferente dos outros, a
+    API NÃO devolve bytes/base64 — devolve uma URL hospedada → baixamos num 2º GET.
+    Pede 9:16 NATIVO (1080x1920) e PNG; override por IMAGEROUTER_SIZE.
+
+    ⚠️ PRÉ-REQUISITO (verificado no smoke test 2026-06): os modelos ':free' do
+    ImageRouter respondem HTTP 403 via API ("Free models are only available on the
+    website... To gain API access, please deposit any amount") ENQUANTO a conta não
+    receber um depósito inicial — mesmo a geração custando $0. Além disso o tier grátis
+    só aceita size 1024x1024. Por isso o default aqui mira o cenário que de fato roda
+    (modelo pago em 1080x1920); pra rodar no grátis após destravar, setar
+    IMAGEROUTER_MODEL=...:free + IMAGEROUTER_SIZE=1024x1024. O 403/400 cai como None
+    no próximo fallback (nunca derruba o pipeline). Retorna Path|None.
+    """
+    import requests
+    import time
+    model = os.environ.get("IMAGEROUTER_MODEL",
+                           "black-forest-labs/FLUX-1-schnell:free")
+    size = os.environ.get("IMAGEROUTER_SIZE", "1080x1920")  # 9:16 nativo (free só 1024x1024)
+    url = "https://api.imagerouter.io/v1/openai/images/generations"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "prompt": prompt,
+        "model": model,
+        "size": size,                 # 9:16 nativo — sai vertical, Ken Burns só enquadra
+        "response_format": "url",     # ImageRouter entrega URL hospedada, não bytes
+        "output_format": "png",
+    }
+    out_path = out_dir / f"broll_ai_{index:02d}.png"
+    log.info("Gerando b-roll por IA (ImageRouter %s): '%s'", model, prompt[:80])
+    attempts = max(1, int(os.environ.get("CANAL_DARK_AI_RETRIES", "4")))
+    backoffs = [3, 7, 15, 25]
+    for attempt in range(attempts):
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=120)
+            if resp.status_code == 200:
+                try:
+                    data = (resp.json().get("data") or [])
+                except Exception:
+                    data = []
+                img_url = data[0].get("url", "") if data else ""
+                if not img_url:
+                    log.warning("[imagerouter] resposta 200 sem 'data[0].url'.")
+                    return None
+                # 2º GET: baixa a imagem hospedada e grava nos bytes locais.
+                img_resp = requests.get(img_url, timeout=120)
+                if img_resp.status_code == 200 and len(img_resp.content or b"") >= 2000:
+                    out_path.write_bytes(img_resp.content)
+                    return out_path
+                log.warning("[imagerouter] download da imagem falhou (HTTP %s).",
+                            img_resp.status_code)
+                return None
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < attempts - 1:
+                wait = backoffs[min(attempt, len(backoffs) - 1)]
+                log.warning("[imagerouter] HTTP %s (tentativa %d/%d) — aguardando %ds...",
+                            resp.status_code, attempt + 1, attempts, wait)
+                time.sleep(wait)
+                continue
+            log.warning("[imagerouter] HTTP %s: %s", resp.status_code, resp.text[:160])
+            return None
+        except Exception as exc:
+            if attempt < attempts - 1:
+                time.sleep(backoffs[min(attempt, len(backoffs) - 1)])
+                continue
+            log.warning("[imagerouter] erro: %s", exc)
+            return None
+    return None
+
+
+def _fetch_ai_image(prompt: str, out_dir: Path, index: int) -> Optional[Path]:
+    """
+    Gera 1 imagem por IA a partir de um prompt COMPLETO, escolhendo o provider:
+      1. Cloudflare Workers AI (FLUX) se CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN
+         estiverem no ambiente — estável, sem o rate-limit do Pollinations.
+      2. Senão (ou se o Cloudflare falhar) → Pollinations (com retry/backoff).
+      3. Senão (ou se o Pollinations falhar) → ImageRouter se IMAGEROUTER_API_KEY
+         estiver no ambiente — último elo da cascata (salva o render quando os 2
+         grátis morrem: Cloudflare 429 de cota e Pollinations 402 pago).
+    """
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if account and token:
+        img = _fetch_cloudflare(prompt, out_dir, index, account, token)
+        if img is not None:
+            return img
+        log.info("[ai] Cloudflare não retornou — caindo no Pollinations.")
+    img = _fetch_pollinations("ai", out_dir, index, prompt=prompt)
+    if img is not None:
+        return img
+    ir_key = os.environ.get("IMAGEROUTER_API_KEY", "").strip()
+    if ir_key:
+        log.info("[ai] Pollinations não retornou — caindo no ImageRouter.")
+        return _fetch_imagerouter(prompt, out_dir, index, ir_key)
+    return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ONE PIECE — VISUAL CONTROLLER (subject library + concept→subject mapper)
+# ════════════════════════════════════════════════════════════════════════════
+# Spec do Vinicius: TODA linha do One Piece vira UM subject on-brand (personagem,
+# emblema ou ícone) — NUNCA cenário genérico (pedra solta / oceano vazio). Beats
+# abstratos usam o EMBLEMA do conceito. Copyright afrouxado (decisão do canal): pode
+# retratar personagens reais como AI art em estilo One Piece (Content ID aceito →
+# canal mira alcance em TikTok/Reels). Ordem de prioridade da imagem por cena:
+#   1) personagem NOMEADO na fala → imagem REAL do Fandom (mais fiel) [já existente]
+#   2) beat abstrato → CONCEITO→subject deste mapa → AI render estilo One Piece
+#   3) nada casou → subject default (luffy; jolly_roger se o beat é sombrio)
+# Em nenhum caso emite paisagem vazia ou Pexels live-action.
+#
+# v5 — FICHAS CANÔNICAS (sheet injection). Cada entrada de PERSONAGEM agora carrega a
+# ficha COMPLETA do cd-nicho-onepiece (anchor + hair + eyes + marks + outfit + accessories
+# + build + palette), pra a IDENTIDADE ficar fiel/consistente entre shots. As CENAS seguem
+# livres (ângulo/ação/composição do v4) — só os TRAÇOS do personagem ficam travados.
+# NOTA "gota azul/lágrima": a scar-under-left-eye do Luffy/Gear5 é traço REAL (mantida e
+# descrita como STITCHED HORIZONTAL SCAR, não teardrop). A supressão da GOTA é feita por
+# clause POSITIVA (_OP_FACE_CLARITY_LOCK) injetada em todo prompt — FLUX schnell (CFG=1)
+# ignora negative, então descrevemos o estado desejado ("clean dry face"), não o proibido.
+_OP_SUBJECT_LIBRARY = {
+    "luffy":           "Monkey D. Luffy, a lean athletic young man with short messy spiky black hair, large round dark expressive energetic eyes, a SHORT HORIZONTAL stitched scar BELOW his left eye (two tiny lines, a self-inflicted knife scar — NOT a teardrop, never a falling tear or drop shape), a huge carefree grin, wearing an open sleeveless RED cardigan vest over a bare chest, blue knee-length shorts and sandals, the iconic woven straw hat with a red ribbon band on his head or hanging on his back, a clean dry face, fist raised in a dynamic low-angle heroic pose",
+    "gear5_luffy":     "Gear 5 Luffy (awakened Sun God Nika), stark snow-WHITE hair (pure white, NOT blond, NOT yellow, NOT golden) flared upward with flame-like wavy tips, pure white blank joyful eyes with thick dark rims, the same short horizontal stitched scar below his left eye (a scar, NOT a teardrop), an enormous manic carefree grin, his vest and shorts turned all WHITE, a floating WHITE SMOKE-RING halo hovering above his head like a ring of cloud, the straw hat tilted on his head, a cartoonish elastic rubber-toon godlike body, warm golden liberation light, a clean dry face",
+    "straw_hats":      "the Straw Hat Pirates crew standing together on the deck of their ship, backs to camera facing the horizon, heroic ensemble",
+    "joy_boy_nika":    "the Sun God Nika / Joy Boy, a luminous pure-white mythic warrior of liberation with flame-shaped curling-upward white hair, a wide joyful freeing grin (eyes as simple happy glowing curves, iconographic not a detailed portrait), a glowing white liberation aura, beating the drums of liberation, a joyful dancing larger-than-life posture, warm golden light, a clean dry face",
+    "imu":             "Im (Nerona Imu), a slender androgynous shadow-obscured ruler seated on the Empty Throne, long dark flowing hair draping over the shoulders, the face KEPT IN DEEP SHADOW with only a SINGLE ominous glowing piercing eye visible through the darkness (never a fully rendered clear face), a long regal flowing dark royal-blue cloak, a severe monarchic silhouette, cold dark royal blue and gold and deep shadow, candlelit darkness",
+    "gorosei":         "the Five Elders / Gorosei of the World Government — five differentiated elderly grim powerful men with long white and grey hair and beards (one bald with a long white beard, one with a topknot, one severe and slim, one stout), matching DARK formal suits, each carrying a personal weapon, standing in a dim marble chamber radiating cold sinister authority",
+    "yonko":           "a Yonko, an Emperor of the Sea, a colossal intimidating pirate figure radiating menace against a stormy ocean and lightning",
+    "vegapunk":        "Dr. Vegapunk, a futuristic genius scientist surrounded by glowing holographic screens and humming machinery in a high-tech lab",
+    "straw_hat":       "a single weathered straw hat with a red ribbon resting on a wooden ship deck, soft cinematic backlight, the sea behind",
+    "jolly_roger":     "the Straw Hat Pirates Jolly Roger, a white skull wearing a straw hat on a tattered black flag snapping in a stormy wind",
+    "thousand_sunny":  "a grand lion-headed golden pirate galleon with a sunflower figurehead and billowing sails cutting across a glittering ocean sunset",
+    "gear5_nika":      "Gear 5 Luffy (Hito Hito no Mi Model Nika, awakened), stark snow-WHITE hair (pure white, NOT blond, NOT yellow, NOT golden) flared upward with flame-like tips, pure white blank joyful eyes with thick dark rims, the short horizontal stitched scar below his left eye (a scar, NOT a teardrop), an enormous manic carefree grin, all-WHITE vest and shorts, a floating WHITE SMOKE-RING halo above his head, the straw hat tilted on his head, a cartoonish elastic rubber-toon body, joyful reality-bending rings of light and warm golden liberation glow, a clean dry face",
+    "haki":            "a clenched fist erupting with conqueror's Haki, crackling black-and-purple lightning splitting a dark stormy sky",
+    "poneglyph":       "a massive ancient cube-shaped Poneglyph of black stone carved with glowing red ancient hieroglyphs, standing in a torchlit ruin",
+    "road_poneglyph":  "a glowing red Road Poneglyph projecting a beam of light across an antique sea chart toward a hidden island",
+    "devil_fruit":     "a single exotic Devil Fruit with a hypnotic spiral pattern, floating and pulsing with a surreal otherworldly glow",
+    "ancient_weapon":  "a colossal silhouette of an ancient weapon of mass destruction rising over the sea — a titanic battleship and a giant sea king — apocalyptic scale",
+    "buster_call":     "a Buster Call: a ring of Marine warships unleashing a storm of cannon fire onto a burning island, smoke and explosions",
+    "grand_line_map":  "an antique nautical map of the One Piece world, the Red Line and Grand Line inked across aged parchment with a brass compass rose",
+    "void_century":    "the ruins of a lost ancient kingdom from the Void Century — toppled stone pillars and fading carved inscriptions under a brooding sky",
+    "empty_throne":    "the Empty Throne of the World Government, an ornate seat of swords in a vast dark hall, a looming hooded shadow, candlelight",
+    "one_piece":       "the One Piece, a mysterious glowing treasure at the end of the world bathed in golden light beams, its true form hidden in radiance",
+    "world_government":"the World Government emblem of four linked dark circles on a white flag, raised over an imposing marble government hall",
+    "marines":         "a fleet of Marine warships under the Marine seagull emblem and banners, sailing in formation under a dramatic sky",
+    "celestial_dragons":"the Celestial Dragons, arrogant nobles in white robes and bubble helmets on golden thrones, oppressive grandeur",
+    "will_of_d":       "the mysterious initial D glowing within an ancient carved stone, the unspoken Will of D, fateful and ominous",
+    "ancient_kingdom": "a magnificent lost ancient kingdom at its height — grand spires and banners — moments before its fall, golden-age grandeur",
+    "laugh_tale":      "Laugh Tale, the final mythical island at the end of the Grand Line shrouded in mist and golden light, journey's end",
+    # Cenário/objeto NEUTRO on-brand (pad de fallback p/ shots scenery/object quando a lane
+    # WEB não trouxe foto livre e a fala não casou conceito) — SEM personagem, SEM emblema IP.
+    "op_world_scenery":"an evocative establishing landscape of the One Piece world — a vast open pirate sea under a dramatic sky, distant weathered islands, old sailing ships on the horizon, mist and golden light, NO people, NO characters, NO logos",
+    # v4/v5 — signature traits do spec + fichas canônicas (mantém os demais; só ADICIONA / enriquece).
+    "loki":            "Loki, the Accursed Prince of Elbaf, a COLOSSAL ancient giant on the scale of Oars bound by enormous Sea-Prism-Stone iron CHAINS to the World Tree, long messy light MAGENTA hair styled into TWIN FRONT BRAIDS with a pointed magenta goatee, slitted black eyes KEPT COVERED by bandage wrappings, red tribal TATTOOS across his arms and shoulders, a metal plate on the ridge of his nose, massive ancient-giant HORNS (one wrapped in bandage), a black horned helmet, a large PURPLE cape, a muscular bare tattooed torso, a manic tongue-out grin, rendered with extreme low-angle towering scale against frozen Elbaf cliffs",
+    "elbaf":           "Elbaf, the legendary island of giants — colossal warriors, vast frozen cliffs and a towering World Tree under an icy sky, mythic scale",
+    "shanks":          "Red-Haired Shanks, a tall lean-muscular man with medium-length tousled RED hair, dark eyes crossed by THREE parallel vertical SCARS over his left eye, a MISSING LEFT ARM (the empty left sleeve pinned), a black captain's cloak draped over the shoulders like a mantle, an open white shirt and sash, calm commanding Emperor's authority, a clean dry face",
+    "blackbeard":      "Marshall D. Teach (Blackbeard), a very large bulky heavyset imposing pirate with thick wild unkempt BLACK hair and a black beard, dark sunken menacing eyes under a heavy brow, a signature GAP-TOOTHED missing-teeth grin, a dark open captain's coat over a broad hairy chest, a swirling black darkness aura, overwhelming dread",
+    "zoro":            "Roronoa Zoro, a tall broad heavily-muscled swordsman with short cropped spiky GREEN moss-green hair, one visible dark eye and a long vertical SCAR over his closed LEFT eye, three gold ball EARRINGS on his left ear, a dark green-black open long coat over a bare scarred chest, a GREEN haramaki belly-wrap holding THREE katana at his left hip (Three-Sword Style), black pants, a clean dry face, stern composed",
+    "nami":            "Nami, a slim athletic young woman with long straight ORANGE hair, sharp confident brown eyes, a blue pinwheel-and-tangerine tattoo on her left upper arm, a stylish blue-and-white midriff-baring beach-pirate outfit, holding the segmented blue Clima-Tact weather staff, a confident smirk, a clean dry face",
+}
+
+# (gatilhos, subject) — ordem importa: específico ANTES de genérico. 1º match vence.
+_OP_CONCEPT_MAP = [
+    (["loki", "prince of elbaf", "chained prince", "harald", "giant prince"], "loki"),
+    (["elbaf", "land of giants", "island of giants", "giant warriors", "world tree"], "elbaf"),
+    (["gear 5", "gear fifth", "gear fourth", "awakening", "awakened", "drums of liberation"], "gear5_nika"),
+    (["joy boy", "joyboy", "nika", "sun god", "liberation", "liberate", "liberator", "freedom", "free the", "savior", "warrior of liberation"], "joy_boy_nika"),
+    (["empty throne", "the throne", "imu", "imu-sama", "ruler of the world", "monarch"], "imu"),
+    (["gorosei", "five elders", "the elders", "warrior god", "saint jaygarcia"], "gorosei"),
+    (["celestial dragon", "celestial dragons", "tenryubito", "world nobles", "the nobles"], "celestial_dragons"),
+    (["road poneglyph", "four roads", "red poneglyph"], "road_poneglyph"),
+    (["laugh tale", "raftel", "final island", "end of the grand line"], "laugh_tale"),
+    (["world government", "world gov", "the government", "the marines hq", "mariejois", "holy land"], "world_government"),
+    (["buster call", "annihilat", "wiped out", "wipe out", "destroyed the island", "ohara", "razed"], "buster_call"),
+    (["marine", "marines", "navy", "admiral", "fleet admiral", "warships"], "marines"),
+    (["poneglyph", "poneglyphs", "carved", "tablet", "hieroglyph", "cannot read", "can't read", "no one can read", "no one alive can read", "stones", "red stone"], "poneglyph"),
+    (["void century", "blank period", "lost century", "hundred year", "forbidden history", "lost history", "erased history", "missing century"], "void_century"),
+    (["ancient kingdom", "lost kingdom", "great kingdom", "the kingdom that"], "ancient_kingdom"),
+    (["will of d", "the d", "initials d", "born with the d", "carry the d"], "will_of_d"),
+    (["haki", "conqueror", "conqueror's", "willpower", "armament", "observation", "advanced haki"], "haki"),
+    (["devil fruit", "paramecia", "zoan", "logia", "mythical zoan", "the fruit"], "devil_fruit"),
+    (["ancient weapon", "pluton", "poseidon", "uranus", "weapon of mass", "weapon that"], "ancient_weapon"),
+    (["thousand sunny", "going merry", "set sail", "sailing", "the ship", "aboard"], "thousand_sunny"),
+    (["straw hat pirates", "the crew", "strawhats", "straw hats", "nakama", "his crew"], "straw_hats"),
+    (["pirate king", "future king", "captain luffy", "luffy", "monkey d", "straw hat luffy"], "luffy"),
+    (["shanks", "red-haired", "red haired"], "shanks"),
+    (["blackbeard", "teach", "marshall d", "kurohige"], "blackbeard"),
+    (["zoro", "roronoa", "santoryu", "three-sword", "three sword", "swordsman"], "zoro"),
+    (["nami", "navigator", "cat burglar", "clima-tact", "clima tact"], "nami"),
+    (["yonko", "yonkou", "emperor", "emperors", "kaido", "big mom", "whitebeard"], "yonko"),
+    (["vegapunk", "scientist", "technology", "science", "laboratory", "lineage factor"], "vegapunk"),
+    (["jolly roger", "pirate flag", "their flag", "emblem", "symbol of"], "jolly_roger"),
+    (["grand line", "red line", "navigate", "world map", "the route", "new world", "calm belt"], "grand_line_map"),
+    (["greatest treasure", "the one piece", "roger's treasure", "wealth fame power", "left behind", "the treasure", "ultimate treasure"], "one_piece"),
+    (["devil", "power", "war", "battle", "clash", "fight", "fought", "conflict"], "haki"),
+    (["history", "truth", "secret", "secrets", "hidden", "erase", "erased", "covered up"], "poneglyph"),
+]
+_OP_DEFAULT_SUBJECT = "luffy"
+_OP_DARK_DEFAULT_SUBJECT = "jolly_roger"
+# Pad de fallback p/ shots scenery/object (render IA SEM personagem) quando a lane WEB
+# não trouxe foto livre e a fala não disparou um conceito do _OP_CONCEPT_MAP.
+_OP_SCENERY_PAD_SUBJECT = "op_world_scenery"
+_OP_DARK_WORDS = ("death", "dark", "fear", "erase", "destroy", "war", "blood",
+                  "betray", "kill", "shadow", "evil", "danger", "threat", "doom")
+
+# ── CONTROLLER v3: ART STYLE LOCK + AVOID TERMS ─────────────────────────────
+# Trava de estilo anexada a TODO prompt One Piece: força o FLUX a render no estilo
+# OFICIAL do anime (cel-shaded 2D, traço Oda) em vez de "digital art" genérica/3D.
+# É o que faz a imagem PARECER One Piece (requisito a). NÃO afeta outros nichos:
+# só os helpers _op_* (exclusivos do canal one-piece) usam estas constantes.
+_OP_ART_STYLE_LOCK = (
+    "in the official One Piece anime style by Eiichiro Oda, Toei Animation, "
+    "cel-shaded 2D anime, bold clean black ink outlines, flat vibrant saturated colors, "
+    "expressive exaggerated Oda character proportions, dramatic shonen anime composition, "
+    "anime key-visual look"
+)
+# ── PROBLEM 1: supressão da "gota azul / lágrima / suor" sob o olho ──────────────
+# NUANCE CRÍTICA: a lane usa FLUX schnell (Cloudflare/Pollinations), destilado, CFG=1 →
+# **IGNORA negative prompt**. Pior: jogar os tokens proibidos ("tear, teardrop, sweat
+# drop") numa cláusula "Avoid:" no fim do prompt POSITIVO faz o FLUX renderizar a gota
+# (ele lê os tokens, não a negação). Por isso NÃO usamos negative e NÃO despejamos esses
+# tokens no prompt. A supressão que FUNCIONA é uma cláusula POSITIVA descrevendo o ESTADO
+# desejado da face — "clean dry face, clear smooth skin under the eyes" — injetada em TODO
+# prompt One Piece. Descrever o que QUEREMOS (pele limpa e seca) é o que o FLUX honra.
+# A scar-under-left-eye do Luffy é traço REAL e fica nas fichas (descrita como STITCHED
+# HORIZONTAL SCAR, never a teardrop) — o que removemos é só a GOTA.
+_OP_FACE_CLARITY_LOCK = (
+    "clean dry face with clear smooth skin under the eyes, "
+    "no teardrop, no falling tear, no sweat drop, no water droplet on the face, "
+    "no blue drop or marking under the eye"
+)
+# Termos a EVITAR sempre (paisagem vazia / off-style / artefato da gota). Mantidos como
+# DOCUMENTAÇÃO/metadata e usados na cláusula "Avoid:" SÓ para os termos de COMPOSIÇÃO
+# (paisagem vazia, off-style). Os termos de ARTEFATO-DE-FACE (tear/sweat/drop) NÃO são
+# despejados como tokens no prompt — eles são tratados pela _OP_FACE_CLARITY_LOCK positiva
+# acima (FLUX ignora negative e renderiza tokens crus). Ver _op_avoid_clause().
+_OP_AVOID_TERMS = (
+    "empty ocean", "calm sea", "plain seascape", "random rock", "lone boulder",
+    "generic island", "empty beach", "plain sky", "nature b-roll",
+    "scenery without subject", "unrelated landscape", "photorealistic",
+    "3d render", "western cartoon", "generic anime", "neutral portrait",
+    # artefatos de face (a "gota azul"): listados para metadata/doc — NÃO injetados como
+    # tokens crus no prompt (FLUX renderiza); suprimidos via _OP_FACE_CLARITY_LOCK positiva.
+    "tear", "teardrop", "crying", "sweat drop", "sweatdrop",
+    "water droplet on face", "blue drop under eye",
+)
+# Termos de ARTEFATO-DE-FACE que NUNCA podem virar token cru no prompt do FLUX (CFG=1).
+_OP_FACE_ARTIFACT_TERMS = frozenset({
+    "tear", "teardrop", "crying", "sweat drop", "sweatdrop",
+    "water droplet on face", "blue drop under eye",
+})
+
+
+def _op_avoid_clause() -> str:
+    """Cláusula 'Avoid:' SÓ com os termos de COMPOSIÇÃO/off-style (paisagem vazia, 3d, etc).
+    Filtra os termos de ARTEFATO-DE-FACE (tear/sweat/drop): no FLUX schnell (CFG=1, ignora
+    negative) jogar esses tokens no prompt positivo CAUSA a gota — a supressão deles é feita
+    pela _OP_FACE_CLARITY_LOCK positiva. Retorna 'Avoid: a, b, c.'."""
+    safe = [t for t in _OP_AVOID_TERMS if t not in _OP_FACE_ARTIFACT_TERMS]
+    return "Avoid: " + ", ".join(safe) + "."
+
+# ── CONTROLLER v4: SHOT / CAMERA LIBRARY ────────────────────────────────────
+# Em vez de sempre um retrato neutro, o v4 enquadra CADA cena como um SHOT
+# cinematográfico deliberado (POV, over-the-shoulder, low/high angle, close-up,
+# wide, dutch tilt, montagem). Cada entrada é uma cláusula de câmera pronta pra
+# entrar no início do prompt. As chaves casam com o que o roteirista pode pedir
+# em visual_context.shot_type (opcional); senão o motor escolhe pela BATIDA da
+# linha (ver _op_pick_shot). Exclusivo do one-piece (só os helpers _op_* usam).
+_OP_SHOT_LIBRARY = {
+    "pov":          "first-person POV shot, the viewer looking at the scene",
+    "over_shoulder":"over-the-shoulder shot, a dark foreground silhouette framing the subject ahead in focus",
+    "low_angle":    "dramatic low-angle worm's-eye shot, the subject towering and powerful",
+    "high_angle":   "high-angle bird's-eye shot, the subject small, trapped and overwhelmed",
+    "close_up":     "extreme close-up shot on the eyes or clenched fist, intense emotion",
+    "wide":         "wide establishing shot, epic scale of the place and the moment",
+    "dutch":        "dutch-tilt canted shot, a sense of unease and wrongness",
+    "montage":      "composed split-frame montage shot, two subjects facing off in one frame",
+}
+# Gatilhos de batida → shot (1º match vence). Casa a câmera ao momento da fala:
+# revelação → close-up/POV; poder → low angle; tragédia/derrota → high angle;
+# escala de lugar/frota → wide; reviravolta → dutch tilt.
+_OP_SHOT_TRIGGERS = [
+    (["towering", "powerful", "strongest", "unstoppable", "god", "conqueror", "dominat", "rises", "rising", "ruler"], "low_angle"),
+    (["defeated", "fell", "fallen", "trapped", "doomed", "small", "buried", "crushed", "alone", "execution", "executed", "died", "death"], "high_angle"),
+    (["realizes", "reveal", "revealed", "secret", "truth", "notice", "noticed", "eye", "fear", "shock", "stunned"], "close_up"),
+    (["fleet", "island", "armada", "ocean", "across the", "whole world", "everywhere", "entire", "vast", "scale"], "wide"),
+    (["wrong", "twist", "lie", "lied", "betray", "betrayed", "hidden agenda", "not what", "actually"], "dutch"),
+    (["looking at", "stares at", "watches", "watching", "stands before", "faces", "sees"], "pov"),
+    (["confront", "against", "faces off", "stares down", "stood against"], "over_shoulder"),
+]
+
+
+def _op_pick_shot(blob: str, vctx: dict) -> str:
+    """
+    Escolhe a cláusula de SHOT/CAMERA do v4 pra esta cena. Prioridade:
+      1. vctx.shot_type explícito do roteirista (se mapear pra _OP_SHOT_LIBRARY);
+      2. heurística pela batida da fala (_OP_SHOT_TRIGGERS);
+      3. default 'close_up' (emoção do personagem — melhor que retrato neutro).
+    Retorna "" se shot_type='none' (operador desliga a câmera para esta cena).
+    Aceita também uma cláusula de câmera livre via vctx.camera (anexada à do shot).
+    """
+    vctx = vctx or {}
+    requested = (vctx.get("shot_type") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if requested == "none":
+        return ""
+    shot_key = requested if requested in _OP_SHOT_LIBRARY else ""
+    if not shot_key:
+        for triggers, key in _OP_SHOT_TRIGGERS:
+            if any(t in blob for t in triggers):
+                shot_key = key
+                break
+    if not shot_key:
+        shot_key = "close_up"
+    clause = _OP_SHOT_LIBRARY[shot_key]
+    camera = (vctx.get("camera") or "").strip()
+    if camera:
+        clause = f"{clause}, {camera}"
+    return clause
+
+
+def _op_clean_action(line_text: str) -> str:
+    """
+    Extrai a AÇÃO/EMOÇÃO da linha narrada para casar a imagem com o que a linha diz
+    (requisito b: subject+action+emotion). Heurística leve: tira pontuação/aspas e
+    encurta para ~14 palavras (o FLUX perde o fio em frases longas). Devolve "" se a
+    linha for vazia — nesse caso o prompt usa só o subject estático da biblioteca.
+    """
+    t = re.sub(r"[\"“”'’]", "", (line_text or "")).strip()
+    t = re.sub(r"\s+", " ", t)
+    words = t.split()
+    if not words:
+        return ""
+    return " ".join(words[:14])
+
+# PURE-AI DEFAULT (v4): o b-roll do one-piece é render IA cinematográfico SOMENTE.
+# Os stills reais baixa-res do Fandom (painel cru de mangá / emblema PNG sem contexto)
+# ficam atrás de uma flag OPCIONAL — default OFF. Ligue com OP_USE_FANDOM_STILLS=1 se
+# quiser voltar a misturar imagens reais do Fandom (ex.: símbolos exatos do WG/Marines).
+def _op_use_fandom_stills() -> bool:
+    """True só se o operador ligar OP_USE_FANDOM_STILLS=1. Default OFF = PURE-AI."""
+    return os.environ.get("OP_USE_FANDOM_STILLS", "0").strip() == "1"
+
+
+# ── LANE WEB (foto real PD/CC para shots de CENÁRIO/OBJETO) ──────────────────
+# broll_kind='scenery'|'object' pode usar FOTO REAL de fonte livre (wikimedia/openverse/
+# archive.org via image_providers lane "burn", que JÁ filtra licença p/ PD/CC0/CC-BY/CC-BY-SA).
+# Em CIMA disso aplicamos um guardrail EXTRA anti-IP One Piece: descarta qualquer match que
+# pareça still de anime / fanart (título/fonte/query citando "one piece", "anime", "fanart",
+# nome de personagem, wiki de fã). Em QUALQUER dúvida → descarta → cai pro render IA.
+# NUNCA é chamada para broll_kind='character'.
+
+# Tokens que, no TÍTULO/fonte/atribuição de um resultado web, denunciam still/fanart de OP.
+# Match por PALAVRA INTEIRA (\b) — não substring — pra não pegar "manga" em "mangabeira" etc.
+_OP_WEB_IP_TOKENS = (
+    "one piece", "onepiece", "anime", "manga", "fanart", "fan art", "fan-art",
+    "cosplay", "shonen", "shounen", "shonen jump", "toei", "shueisha",
+    "eiichiro oda", "crunchyroll", "funimation", "screencap", "doujin", "vtuber",
+)
+# Nomes de personagens DISTINTOS (improváveis em foto de cenário) → match por palavra
+# inteira sozinho já descarta (é quase certo fanart/still daquele personagem).
+_OP_WEB_CHARACTER_NAMES = (
+    "luffy", "zoro", "roronoa", "sanji", "usopp", "chopper", "franky",
+    "jinbe", "jimbei", "shanks", "buggy", "blackbeard", "kaido", "kaidou",
+    "linlin", "whitebeard", "newgate", "sabo", "akainu",
+    "aokiji", "kizaru", "sengoku", "mihawk", "doflamingo",
+    "katakuri", "yamato", "hancock", "rayleigh",
+    "joyboy", "joy boy", "nika", "gorosei", "vegapunk",
+    "bonney", "harald", "arlong", "wapol", "bellamy", "bartolomeo",
+    "gear 5", "gear fifth", "straw hat", "going merry", "thousand sunny", "jolly roger",
+)
+# Nomes que TAMBÉM são palavras comuns em inglês (boat≠boa, lawn≠law, space≠ace...). Mesmo
+# como palavra inteira dão falso positivo em foto de cenário ("a kid", "the law", "a dragon").
+# Só descartam se VIEREM ACOMPANHADOS de um sinal de anime/OP no haystack (cosplay/anime/etc).
+_OP_WEB_AMBIGUOUS_NAMES = (
+    "ace", "law", "kid", "robin", "brook", "boa", "dragon", "carrot", "vivi",
+    "koby", "smoker", "moria", "kuro", "enel", "marco", "nami", "imu", "teach",
+    "garp", "kuma", "loki", "perona", "tashigi",
+)
+# Fontes/domínios cujo conteúdo é IP / fan-made → nunca aceitar pela lane web.
+_OP_WEB_BAD_SOURCE = (
+    "fandom.com", "wikia", "deviantart", "pinterest", "artstation", "zerochan",
+    "danbooru", "gelbooru", "safebooru", "myanimelist", "anilist", "crunchyroll",
+    "reddit.com/r/onepiece", "tumblr", "pixiv",
+)
+
+
+def _op_word_hit(haystack: str, terms) -> Optional[str]:
+    """True-ish: devolve o 1º termo de `terms` presente em `haystack` como PALAVRA INTEIRA
+    (boundary não-alfanumérico dos dois lados). Evita o falso positivo de substring (ex.:
+    'boa' em 'boat', 'ace' em 'space'). Termos com espaço/hífen casam como frase."""
+    import re as _re
+    for t in terms:
+        if _re.search(r"(?<![a-z0-9])" + _re.escape(t) + r"(?![a-z0-9])", haystack):
+            return t
+    return None
+
+
+def _op_web_burn_safe(meta: dict, query: str) -> tuple:
+    """
+    Guardrail EXTRA (além do filtro de licença do image_providers) p/ a lane WEB de
+    cenário/objeto: aceita SÓ se a licença for de fato livre E o resultado NÃO parecer
+    still de anime / fanart de One Piece. Qualquer dúvida → rejeita (cai pra IA).
+
+    Checa: (1) licença explicitamente livre (PD/CC0/CC-BY/CC-BY-SA, sem NC/ND nem vazia);
+    (2) título/atribuição/fonte/url não citam One Piece, anime, fanart, nem nome de
+    personagem (match por PALAVRA INTEIRA); (3) domínio da fonte não é wiki de fã / booru.
+
+    Retorna (ok: bool, reason: str) — reason explica o descarte no log.
+    """
+    import image_providers as _ip
+    license_str = str(meta.get("license", "")).strip().lower()
+    # (1) licença: reusa o classificador do image_providers (PD/CC0/CC-BY/CC-BY-SA).
+    if not _ip._license_is_burn_safe(license_str):
+        return False, f"licença não-livre/vazia ({license_str!r})"
+    if "ai-generated" in license_str or "unknown" in license_str:
+        return False, f"licença suspeita ({license_str!r})"
+    # (2)+(3) heurística anti-IP no TEXTO do resultado (título/atribuição/fonte/url+query).
+    haystack = " ".join(str(meta.get(k, "")) for k in
+                        ("attribution", "source_url", "provider", "query")).lower()
+    haystack += " " + (query or "").lower()
+    hit = _op_word_hit(haystack, _OP_WEB_IP_TOKENS)
+    if hit:
+        return False, f"token anime/OP {hit!r} no texto"
+    hit = _op_word_hit(haystack, _OP_WEB_CHARACTER_NAMES)
+    if hit:
+        return False, f"nome de personagem {hit!r} no texto"
+    # nome ambíguo (palavra comum) só descarta se acompanhado de sinal de anime/OP.
+    amb = _op_word_hit(haystack, _OP_WEB_AMBIGUOUS_NAMES)
+    if amb and _op_word_hit(haystack, _OP_WEB_IP_TOKENS + ("cosplay", "character", "anime")):
+        return False, f"nome ambíguo {amb!r} + sinal de anime/OP"
+    src = str(meta.get("source_url", "")).lower()
+    for bad in _OP_WEB_BAD_SOURCE:
+        if bad in src:
+            return False, f"fonte IP/fan {bad!r}"
+    return True, "ok"
+
+
+def _op_find_sidecar(path: Path) -> Optional[dict]:
+    """Lê o sidecar de metadata (<stem>.json) de um arquivo baixado pela lane web.
+    Procura na pasta do arquivo, no img_cache e em IMG_CACHE_DIR (o .jpg é copiado pro
+    out_dir, mas o .json fica no cache). Retorna o dict ou None."""
+    stem = path.stem
+    dirs = [path.parent]
+    try:
+        dirs.append(Path.cwd() / "out" / "img_cache")
+    except Exception:
+        pass
+    env_cache = os.environ.get("IMG_CACHE_DIR", "").strip()
+    if env_cache:
+        dirs.append(Path(env_cache))
+    for d in dirs:
+        mp = d / f"{stem}.json"
+        if mp.exists():
+            try:
+                return json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+    return None
+
+
+def _op_fetch_web_burn(query: str, n: int, broll_dir: Path) -> list:
+    """
+    Tenta resolver até `n` FOTOS REAIS de licença livre (PD/CC) para um shot de
+    CENÁRIO/OBJETO via image_providers lane "burn" (wikimedia/openverse/archive.org).
+    Aplica o guardrail _op_web_burn_safe sobre o sidecar de cada imagem e DESCARTA
+    (apagando o arquivo) qualquer uma que falhe a licença/heurística anti-OP.
+
+    Retorna lista de Paths ACEITOS (pode ser menor que n, ou vazia → caller cai pra IA).
+    NUNCA deve ser chamada para broll_kind='character'.
+    """
+    import image_providers as _ip
+    q = (query or "").strip()
+    if not q:
+        return []
+    # Pede um POOL maior que n: find_images para assim que junta `count`, então se a 1ª
+    # imagem é boa-de-licença mas o NOSSO guardrail anti-OP reprova, ainda sobram opções.
+    pool = max(n, min(n * 3, 8))
+    try:
+        paths = _ip.find_images(q, "one-piece-theories-and-stories", "burn",
+                                count=pool, out_dir=broll_dir)
+    except Exception as exc:
+        log.warning("[one-piece][web] lane burn falhou p/ '%s': %s — cai pra IA.", q, exc)
+        return []
+    accepted: list = []
+    for p in paths:
+        if len(accepted) >= n:
+            # excedente do pool que não vamos usar — apaga pra não poluir broll_dir/créditos
+            try:
+                p.unlink()
+            except Exception:
+                pass
+            continue
+        meta = _op_find_sidecar(p) or {}
+        ok, reason = _op_web_burn_safe(meta, q)
+        if ok:
+            accepted.append(p)
+            log.info("[one-piece][web] ACEITA (cenário/objeto): %s license=%s src=%s",
+                     p.name, meta.get("license", "?"), str(meta.get("source_url", ""))[:60])
+        else:
+            log.info("[one-piece][web] DESCARTADA (%s): %s license=%s src=%s",
+                     reason, p.name, meta.get("license", "?"), str(meta.get("source_url", ""))[:60])
+            try:
+                p.unlink()  # não deixa imagem reprovada vazar pra timeline/créditos
+            except Exception:
+                pass
+    return accepted
+
+
+# Subjects que SÃO símbolos/bandeiras com imagem REAL limpa no Fandom: para esses,
+# busca a imagem real (o símbolo EXATO, ex.: a bandeira do World Government) ANTES de
+# gerar por IA — porque o FLUX faz um emblema genérico, não o símbolo canônico.
+# (Só usado quando OP_USE_FANDOM_STILLS=1; no PURE-AI default tudo vira render IA.)
+_OP_SUBJECT_FANDOM = {
+    "world_government": "World_Government",
+    "marines": "Marines",
+}
+
+# Personagens cuja imagem REAL do Fandom é fraca para Shorts (painel cru de mangá P&B,
+# com balão em japonês) → preferimos um render IA colorido em estilo One Piece, coeso com
+# o resto. Mapa: título do Fandom → subject_key da biblioteca. (Ex.: Imu só tem painel.)
+_OP_PREFER_AI_SUBJECT = {
+    "Nerona_Imu": "imu",
+}
+
+# Título do Fandom → subject_key, para descrever uma entidade nomeada na MONTAGEM "A vs B"
+# (e em qualquer lugar que precise da descrição rica do subject a partir da entidade real).
+_OP_TITLE_SUBJECT = {
+    "Joy_Boy": "joy_boy_nika",
+    "Monkey_D._Luffy": "luffy",
+    "Nerona_Imu": "imu",
+    "World_Government": "world_government",
+    "Marines": "marines",
+    "Marshall_D._Teach": "blackbeard",
+    "Shanks": "shanks",
+    "Loki": "loki",
+    "Elbaf": "elbaf",
+    "Roronoa_Zoro": "zoro",
+    "Nami": "nami",
+}
+
+
+def _op_pick_subject(text: str, query: str) -> tuple:
+    """
+    Mapeia o CONCEITO de um beat (fala + query) para um subject One Piece on-brand.
+    Retorna (subject_key, subject_description). Nunca devolve None — beat sem match
+    cai no default (jolly_roger se o tom é sombrio; senão luffy).
+    """
+    blob = f"{text} {query}".lower()
+    for triggers, subj in _OP_CONCEPT_MAP:
+        if any(t in blob for t in triggers):
+            return subj, _OP_SUBJECT_LIBRARY[subj]
+    is_dark = any(w in blob for w in _OP_DARK_WORDS)
+    subj = _OP_DARK_DEFAULT_SUBJECT if is_dark else _OP_DEFAULT_SUBJECT
+    return subj, _OP_SUBJECT_LIBRARY[subj]
+
+
+def _op_build_image_prompt(subject_desc: str, vctx: dict, action: str = "",
+                           blob: str = "") -> str:
+    """Monta o prompt final em estilo One Piece (template Controller v4) seguindo a fórmula
+    SHOT/CAMERA + SUBJECT + ACTION + EMOTION + SETTING, com mood/palette do visual_context
+    (defaults One Piece se vierem vazios).
+
+    `action` = a fala da linha (subject+action+emotion). Quando presente, o prompt vira
+    "{subject} — {ação da linha}, {traços do subject}" pra a imagem CASAR com o que a linha
+    narra. `blob` (fala+query em minúsculas) escolhe o SHOT/CAMERA pela batida da cena.
+    Sempre anexa o ART STYLE LOCK (faz a imagem PARECER o anime) e a cláusula de termos a
+    evitar. O SHOT vem PRIMEIRO no prompt (o FLUX dá mais peso ao começo) pra enquadrar de
+    fato a cena, em vez de cair num retrato neutro."""
+    vctx = vctx or {}
+    mood = (vctx.get("mood") or "epic, mysterious, hype").strip()
+    palette = (vctx.get("palette") or "deep ocean blues, weathered gold, dramatic high-contrast light").strip()
+    setting = (vctx.get("setting") or "the One Piece world of pirate seas, ancient ruins and the Holy Land").strip()
+    action = (action or "").strip()
+    # SHOT/CAMERA da batida (v4): enquadra a cena ANTES do subject.
+    shot = _op_pick_shot(blob or action.lower(), vctx)
+    shot_clause = f"{shot}: " if shot else ""
+    # Subject + ação da linha (o que está acontecendo) ANTES dos traços de assinatura.
+    subject_clause = f"{subject_desc}, depicting: {action}" if action else subject_desc
+    # _OP_FACE_CLARITY_LOCK (positivo) suprime a "gota azul/lágrima/suor" — FLUX schnell
+    # ignora negative, então descrevemos a pele limpa e seca em vez de proibir a gota.
+    return (
+        f"{shot_clause}{subject_clause}, {_OP_FACE_CLARITY_LOCK}, {_OP_ART_STYLE_LOCK}, {mood} mood, "
+        f"{palette} palette, {setting} in the background, "
+        f"vertical 9:16 composition, dynamic dramatic shonen lighting, no text, no watermark. "
+        f"{_op_avoid_clause()}"
+    )
+
+
+def _estimate_n_imgs(text: str, cap: int = 3) -> int:
+    """
+    Estima QUANTAS imagens distintas uma linha deve ter (~1 imagem a cada
+    CANAL_DARK_SEC_PER_IMAGE segundos de fala), p/ não segurar uma só imagem por
+    muito tempo. Estima a duração por contagem de palavras (~2.5 palavras/s).
+    """
+    sec_per_img = float(os.environ.get("CANAL_DARK_SEC_PER_IMAGE", "4.0"))
+    if sec_per_img <= 0:
+        return 1
+    words = max(1, len((text or "").split()))
+    est_dur = words / 2.5
+    n = int(est_dur / sec_per_img) + (1 if (est_dur % sec_per_img) > 0.1 else 0)
+    return max(1, min(cap, n))
+
+
+def _op_entry_desc(entry: dict) -> str:
+    """Descrição rica de uma entidade validada (p/ montagem A-vs-B). Usa o subject da
+    biblioteca quando a entidade mapeia para um (via ai_subject ou título), senão o nome."""
+    ai_subj = entry.get("ai_subject")
+    if ai_subj and ai_subj in _OP_SUBJECT_LIBRARY:
+        return _OP_SUBJECT_LIBRARY[ai_subj]
+    subj = _OP_TITLE_SUBJECT.get(entry.get("title", ""))
+    if subj and subj in _OP_SUBJECT_LIBRARY:
+        return _OP_SUBJECT_LIBRARY[subj]
+    return f"{entry.get('label', 'a One Piece character')}, a One Piece character"
+
+
+def _op_build_montage_prompt(desc_a: str, desc_b: str, vctx: dict) -> str:
+    """Prompt de MONTAGEM 'A vs B' — confronto dos dois em um único frame dividido."""
+    vctx = vctx or {}
+    mood = (vctx.get("mood") or "epic, tense, hype").strip()
+    palette = (vctx.get("palette") or "deep ocean blues, weathered gold, dramatic high-contrast light").strip()
+    return (
+        f"dramatic split-screen face-off composition: on the left {desc_a}; "
+        f"on the right {desc_b}; the two locked in confrontation, a glowing divide between them, "
+        f"{_OP_FACE_CLARITY_LOCK}, {_OP_ART_STYLE_LOCK}, {mood} mood, {palette} palette, "
+        f"vertical 9:16 composition, dynamic dramatic shonen lighting, no text, no watermark. "
+        f"{_op_avoid_clause()}"
+    )
+
+
+def _op_plan_scene(line_text: str, query: str, matched_entries: list, n: int,
+                   vctx: dict, broll_dir: Path, broll_kind: str = "character") -> list:
+    """
+    PLANEJA até `n` slots de imagem on-brand para uma cena One Piece, SEM rodar a IA lenta.
+    Resolve imagens RÁPIDAS (foto web livre p/ cenário/objeto; personagem/símbolo do Fandom)
+    inline; deixa as imagens de IA como specs ('ai', prompt) para execução PARALELA depois.
+
+    `broll_kind` ROTEIA a fonte:
+      • 'character' → SÓ render IA (NUNCA web — Content ID Toei/Shueisha). Caminho v4 abaixo.
+      • 'scenery'|'object' → tenta FOTO REAL livre (lane WEB burn, PD/CC) ANTES; o que sobrar
+        cai pro render IA. Em qualquer dúvida/falha → IA (nunca imagem não-livre / anime still).
+
+    Retorna lista de specs, cada uma: ('ready', Path)  ou  ('ai', prompt_str).
+    Prioridade IA: (0) montagem A-vs-B se a fala é de confronto e há ≥2 entidades; (1) entidades
+    nomeadas (real, ou IA-preferida p/ Imu); (2) subjects por conceito (símbolo→flag real,
+    senão IA); (3) pad com o subject default. Nunca paisagem vazia / Pexels.
+    """
+    import image_providers as _ip
+    blob = f"{line_text} {query}".lower()
+    # Ação/emoção desta linha — injetada nos prompts de IA pra a imagem CASAR com a fala.
+    action = _op_clean_action(line_text)
+    specs: list = []
+    used_subjects: set = set()
+    used_real: set = set()
+
+    # ── ROTEAMENTO POR SHOT: cenário/objeto tenta FOTO REAL livre (lane WEB) primeiro ──
+    # broll_kind já vem promovido a 'character' pelo validador quando a query nomeia um
+    # ícone IP (Poneglyph, Devil Fruit, navio nomeado...) → aqui scenery/object NÃO nomeia
+    # IP. Buscamos foto PD/CC genérica (lugar/objeto/atmosfera), com guardrail anti-OP.
+    kind = (broll_kind or "character").strip().lower()
+    if kind in ("scenery", "object") and n >= 1:
+        web_imgs = _op_fetch_web_burn(query, n, broll_dir)
+        for wp in web_imgs:
+            if len(specs) >= n:
+                break
+            specs.append(("ready", wp))
+        if len(specs) >= n:
+            log.info("[one-piece] Cena (%s): %d/%d slot(s) por FOTO WEB livre (sem IA).",
+                     kind, len(specs), n)
+            return specs[:n]
+        # Faltou foto livre → completa o restante com render IA de CENÁRIO/OBJETO (não
+        # força personagem nomeado nem montagem A-vs-B; usa o concept-map / pad de cenário).
+        for triggers, subj in _OP_CONCEPT_MAP:
+            if len(specs) >= n:
+                break
+            if subj in used_subjects:
+                continue
+            if any(t in blob for t in triggers):
+                used_subjects.add(subj)
+                specs.append(("ai", _op_build_image_prompt(_OP_SUBJECT_LIBRARY[subj], vctx, action, blob)))
+        pad_subj = _OP_SCENERY_PAD_SUBJECT
+        while len(specs) < n:
+            specs.append(("ai", _op_build_image_prompt(_OP_SUBJECT_LIBRARY[pad_subj], vctx, action, blob)))
+        log.info("[one-piece] Cena (%s): %d slot(s) web + %d render(s) IA de fallback.",
+                 kind, len(web_imgs), n - len(web_imgs))
+        return specs[:n]
+
+    # ── broll_kind == 'character' (ou default seguro): SÓ render IA, NUNCA web ──
+    # (0) MONTAGEM A vs B — confronto entre dois atores nomeados.
+    confrontation = any(k in blob for k in (
+        " vs ", "vs.", "versus", " against ", " between ", "fought", "rivalry",
+        "enemy", "enemies", "clashed", "war between", "faced off", "stood against",
+    ))
+    if confrontation and len(matched_entries) >= 2 and n >= 1:
+        specs.append(("ai", _op_build_montage_prompt(
+            _op_entry_desc(matched_entries[0]), _op_entry_desc(matched_entries[1]), vctx)))
+
+    # (1) entidades nomeadas citadas na fala (real, ou IA-preferida p/ Imu).
+    for entry in matched_entries:
+        if len(specs) >= n:
+            break
+        ai_subj = entry.get("ai_subject")
+        if ai_subj:
+            if ai_subj in used_subjects:
+                continue
+            used_subjects.add(ai_subj)
+            specs.append(("ai", _op_build_image_prompt(_OP_SUBJECT_LIBRARY[ai_subj], vctx, action, blob)))
+        else:
+            img = entry["img"]
+            if id(img) in used_real:
+                continue
+            used_real.add(id(img))
+            specs.append(("ready", img))
+
+    # (2) subjects por conceito presentes na fala.
+    for triggers, subj in _OP_CONCEPT_MAP:
+        if len(specs) >= n:
+            break
+        if subj in used_subjects:
+            continue
+        if any(t in blob for t in triggers):
+            used_subjects.add(subj)
+            # PURE-AI por padrão (v4): o b-roll do one-piece é render IA cinematográfico.
+            # O still real do Fandom (baixa-res / emblema cru) só entra atrás da flag
+            # opcional OP_USE_FANDOM_STILLS=1 (default OFF). Sem a flag, mesmo símbolos
+            # (WG/Marines) viram render IA on-brand, coeso com o resto.
+            if subj in _OP_SUBJECT_FANDOM and _op_use_fandom_stills():
+                try:
+                    ri = _ip._prov_fandom_pageimage(_OP_SUBJECT_FANDOM[subj], broll_dir)
+                except Exception:
+                    ri = None
+                if ri is not None:
+                    specs.append(("ready", ri))
+                    continue
+            specs.append(("ai", _op_build_image_prompt(_OP_SUBJECT_LIBRARY[subj], vctx, action, blob)))
+
+    # (3) pad com o subject default até atingir n (nunca deixa cena sem subject).
+    pad_subj = _OP_DARK_DEFAULT_SUBJECT if any(w in blob for w in _OP_DARK_WORDS) else _OP_DEFAULT_SUBJECT
+    while len(specs) < n:
+        specs.append(("ai", _op_build_image_prompt(_OP_SUBJECT_LIBRARY[pad_subj], vctx, action, blob)))
+
+    return specs[:n]
+
+
+def _op_execute_plans(plans: list, broll_dir: Path) -> list:
+    """
+    Executa os planos de cena. As specs ('ai', prompt) são geradas no Pollinations EM
+    PARALELO (rede-bound → threads), o que derruba bastante o tempo total de render.
+    Specs ('ready', Path) já estão prontas. Devolve lista (por cena) de listas de Paths.
+    Workers via CANAL_DARK_AI_WORKERS (padrão 5).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    tasks = []  # (cena_i, slot_j, prompt, unique_index)
+    for ci, specs in enumerate(plans):
+        for sj, spec in enumerate(specs or []):
+            if spec[0] == "ai":
+                tasks.append((ci, sj, spec[1], ci * 100 + sj))
+
+    results: dict = {}
+    if tasks:
+        # Concorrência: com Cloudflare (estável, sem rate-limit anônimo) usamos 6 por
+        # padrão → render rápido. Sem ele, no Pollinations grátis, caímos p/ 3 (ele 402a
+        # sob rajada; 3 + retry/backoff é o equilíbrio). Override por CANAL_DARK_AI_WORKERS.
+        _has_cf = bool(os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+                       and os.environ.get("CLOUDFLARE_API_TOKEN", "").strip())
+        workers = max(1, int(os.environ.get("CANAL_DARK_AI_WORKERS", "6" if _has_cf else "3")))
+        log.info("[one-piece] Gerando %d imagem(ns) por IA em PARALELO (workers=%d)...",
+                 len(tasks), workers)
+
+        def _run(t):
+            ci, sj, prompt, idx = t
+            return ci, sj, _fetch_ai_image(prompt, broll_dir, idx)
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for ci, sj, path in ex.map(_run, tasks):
+                results[(ci, sj)] = path
+
+    out = []
+    for ci, specs in enumerate(plans):
+        imgs = []
+        for sj, spec in enumerate(specs or []):
+            imgs.append(spec[1] if spec[0] == "ready" else results.get((ci, sj)))
+        imgs = [im for im in imgs if im is not None]
+        out.append(imgs or [None])
+    return out
+
+
+def _build_op_broll(all_queries: list, all_texts: list, all_kinds: list,
+                    op_char_entries: list, ref_images: list, vctx: dict,
+                    broll_dir: Path) -> list:
+    """
+    Monta o broll_files inteiro do canal One Piece: planeja cada cena (rápido), gera todas
+    as imagens de IA EM PARALELO e remonta na ordem. Cada item de broll_files é um Path,
+    None, ou uma LISTA de Paths (várias imagens distintas por cena).
+
+    `all_kinds` (paralelo a all_queries) roteia a FONTE por shot: 'character' → render IA;
+    'scenery'/'object' → tenta foto real livre (lane WEB burn) ANTES, com fallback IA.
+    """
+    plans = []
+    for i, query in enumerate(all_queries):
+        line_text = all_texts[i] if i < len(all_texts) else ""
+        kind = all_kinds[i] if i < len(all_kinds) else "character"
+        is_cta = (i == len(all_queries) - 1)
+        if i < len(ref_images):
+            plans.append([("ready", ref_images[i])])
+            continue
+        if is_cta:
+            plans.append(None)   # CTA reusa o último (resolvido após montar)
+            continue
+        scene_text = (line_text + " " + (query or "")).lower()
+        matched = [e for e in op_char_entries if any(t in scene_text for t in e["terms"])]
+        n = _estimate_n_imgs(line_text)
+        plans.append(_op_plan_scene(line_text, query or "", matched, n, vctx, broll_dir, kind))
+
+    resolved = _op_execute_plans([p if p is not None else [] for p in plans], broll_dir)
+
+    broll_files = []
+    for i, p in enumerate(plans):
+        if p is None:  # CTA
+            broll_files.append(broll_files[-1] if broll_files else None)
+            log.info("[one-piece] Cena %d (CTA): reusa o b-roll anterior.", i)
+        else:
+            imgs = resolved[i]
+            broll_files.append(imgs if len(imgs) > 1 else (imgs[0] if imgs else None))
+            log.info("[one-piece] Cena %d: %d imagem(ns) distinta(s).", i, len(imgs))
+    return broll_files
 
 
 def _fetch_pexels(
@@ -1442,40 +2511,106 @@ def create_solid_color_clip(color: str, duration: float, out_path: Path) -> Path
 # (d) MONTAGEM COM FFMPEG
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _ken_burns_clip(image_path: Path, duration: float, out_path: Path,
-                    variant: int = 0) -> Path:
+def _punch_offset_for_window(words, win_start: float, win_dur: float):
     """
-    Transforma uma imagem em clipe 9:16 com zoom/pan lento (Ken Burns).
+    Acha o offset (em segundos, relativo a win_start) da palavra de MAIOR carga
+    dentro da janela [win_start, win_start + win_dur] — alvo do punch-in.
+
+    Heurística simples (sem NLP): entre as content-words da janela (descarta
+    stop-words curtas), escolhe a de maior "peso" = nº de letras + bônus se começar
+    com maiúscula (nome próprio) ou tiver dígito (número). Empate → a mais à frente.
+
+    Retorna float (0 ≤ offset < win_dur) ou None se nenhuma palavra cair na janela.
+    """
+    win_end = win_start + win_dur
+    best = None  # (peso, offset)
+    for (s, _e, txt) in words:
+        if s < win_start or s >= win_end:
+            continue
+        raw = txt.strip()
+        norm = _norm_token(raw)
+        if not norm:
+            continue
+        if norm in _PUNCH_STOPWORDS and not any(c.isdigit() for c in raw):
+            continue
+        peso = len(norm)
+        if raw[:1].isupper():
+            peso += 3        # provável nome próprio → ênfase
+        if any(c.isdigit() for c in raw):
+            peso += 4        # número → ênfase forte
+        offset = s - win_start
+        # >= favorece a palavra mais à frente em empate (clímax tende a vir no fim).
+        if best is None or peso >= best[0]:
+            best = (peso, offset)
+    if best is None:
+        return None
+    # Recua ~0.1s p/ o zoom começar JUNTO com a sílaba tônica, não depois dela.
+    return max(0.0, best[1] - 0.1)
+
+
+def _ken_burns_clip(image_path: Path, duration: float, out_path: Path,
+                    variant: int = 0, punch_at: Optional[float] = None) -> Path:
+    """
+    Transforma uma imagem em clipe 9:16 com zoom/pan (Ken Burns) mais expressivo.
 
     variant (int): variante de movimento para evitar shots idênticos quando a
     mesma imagem é reutilizada em sub-shots (E5 — cap de duração).
       0 → zoom-in a partir do centro (padrão)
-      1 → zoom-in deslocando levemente para a esquerda/baixo (pan sutil)
+      1 → zoom-in com pan para a esquerda/baixo
       2 → zoom-in a partir do canto superior-direito
-      3 → zoom-out leve (z inicia em 1.12 e decresce para 1.0)
+      3 → zoom-out (z inicia grande e decresce)
+
+    punch_at (float|None): offset em segundos (relativo ao início do clipe) onde
+    aplicar um zoom rápido extra (punch-in na palavra-chave). SUTIL. None = sem punch.
+
+    A VELOCIDADE do zoom/pan deriva da DURAÇÃO (frames): o increment por frame é
+    calculado p/ atingir o alvo (z_end / amplitude do pan) no ÚLTIMO frame — assim o
+    movimento não "morre" em shots longos nem fica violento em shots curtos.
     """
     frames = max(1, int(round(duration * 30)))
 
+    # Amplitude tunável (defaults mais fortes que o Ken Burns antigo).
+    z_end = float(os.environ.get("CANAL_DARK_KB_ZOOM_END", "1.22"))   # antes ~1.15
+    pan_amp = float(os.environ.get("CANAL_DARK_KB_PAN", "0.08"))      # antes ~0.02 (fração de iw/ih)
+
+    # Rate por frame p/ o zoom-in chegar EXATO em z_end no último frame (vel ∝ duração).
+    z_rate = (z_end - 1.0) / frames
+    z_in = f"min(1.0+{z_rate:.6f}*on,{z_end})"
+    # Progresso linear 0→1 ao longo do shot (usa o nº de frames conhecido, não 'in').
+    prog = f"(on/{frames})"
+
     if variant == 1:
-        # Pan: parte do centro-esquerdo e caminha para o centro
-        zoom_expr = "min(zoom+0.0010,1.12)"
-        x_expr = "iw/2-(iw/zoom/2)+iw*0.02*(1-on/in)"
-        y_expr = "ih/2-(ih/zoom/2)+ih*0.015*(1-on/in)"
+        # Pan diagonal p/ esquerda+baixo enquanto dá zoom-in.
+        zoom_expr = z_in
+        x_expr = f"iw/2-(iw/zoom/2)-iw*{pan_amp}*{prog}"
+        y_expr = f"ih/2-(ih/zoom/2)+ih*{pan_amp*0.75:.4f}*{prog}"
     elif variant == 2:
-        # Canto superior-direito
-        zoom_expr = "min(zoom+0.0012,1.15)"
-        x_expr = "iw*0.65-(iw/zoom/2)"
-        y_expr = "ih*0.15-(ih/zoom/2)"
+        # Arranca do canto superior-direito e caminha p/ o centro com zoom-in.
+        zoom_expr = z_in
+        x_expr = f"iw*0.62-(iw/zoom/2)+iw*{pan_amp}*{prog}"
+        y_expr = f"ih*0.18-(ih/zoom/2)+ih*{pan_amp:.4f}*{prog}"
     elif variant == 3:
-        # Zoom-out: começa grande e afasta levemente
-        zoom_expr = "max(1.12-0.0012*on,1.0)"
+        # Zoom-out: começa em z_end e afasta até ~1.0 (rate ∝ duração).
+        zoom_expr = f"max({z_end}-{z_rate:.6f}*on,1.0)"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
     else:
-        # Padrão (variant 0): zoom-in a partir do centro
-        zoom_expr = "min(zoom+0.0012,1.15)"
+        # Padrão (variant 0): zoom-in centralizado.
+        zoom_expr = z_in
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
+
+    # Punch-in: pulso de zoom adicional, triangular e curto, centrado no frame da
+    # palavra-chave (sobe ~0.2s e desce ~0.2s). Aditivo ao zoom base → SUTIL.
+    if punch_at is not None and punch_at >= 0:
+        pf = int(round(punch_at * 30))                      # frame central do punch
+        pf = max(0, min(frames - 1, pf))
+        pw = max(2, int(round(0.20 * 30)))                  # meia-largura do pulso (~6 frames)
+        punch_amp = float(os.environ.get("CANAL_DARK_PUNCH_AMP", "0.06"))
+        # max(0, 1 - |on-pf|/pw): 1 no centro, 0 nas bordas do pulso.
+        pulse = f"{punch_amp}*max(0\\,1-abs(on-{pf})/{pw})"
+        # Soma o pulso e re-clampa no teto p/ não estourar o crop.
+        zoom_expr = f"min(({zoom_expr})+{pulse},{z_end + punch_amp:.4f})"
 
     vf = (
         f"scale={OUTPUT_WIDTH*2}:{OUTPUT_HEIGHT*2}:force_original_aspect_ratio=increase,"
@@ -1601,6 +2736,124 @@ def compute_line_durations(
     return durations
 
 
+def _norm_token(tok: str) -> str:
+    """
+    Normaliza um token p/ casar o texto da linha com a palavra do edge-tts:
+    minúsculas e sem pontuação nas bordas. Mantém apenas alfanuméricos internos
+    (apóstrofo/hífen viram nada) — basta p/ alinhamento, não p/ exibição.
+    """
+    return re.sub(r"[^0-9a-z]+", "", tok.lower())
+
+
+def compute_line_durations_from_words(
+    script: dict,
+    words: list,
+    total_audio_duration: float,
+):
+    """
+    Casa o FIM de cada linha do roteiro com o `end` REAL da última palavra dela,
+    usando os word-timestamps do edge-tts (lista de tuplas (start, end, texto)).
+
+    Por que: `compute_line_durations` só aproxima por contagem de palavras, o que
+    dessincroniza o corte da fala (ex.: pausas de pontuação, palavras longas). Aqui
+    a duração de cada shot bate com a fala de verdade → cadência real.
+
+    Estratégia (tolerante a tokenização/pontuação):
+      - A narração é " ".join(textos das linhas + cta), então os tokens das linhas
+        aparecem NA MESMA ORDEM na lista `words`.
+      - Para cada linha, consumimos da lista `words` tantos tokens quanto a linha
+        tem (casando por token normalizado quando possível; se um token não casar,
+        avançamos mesmo assim p/ não travar — alinhamento é aproximado mas monotônico).
+      - O fim da linha = `end` da última palavra consumida; a duração = fim atual −
+        fim anterior.
+
+    Retorna (durations, line_bounds):
+      durations   = lista de floats (duração de cada segmento: linhas + cta)
+      line_bounds = lista de (start_sec, end_sec) absolutos de cada segmento
+    Levanta ValueError se o casamento for inseguro → caller cai no fallback.
+    """
+    all_texts = [line["text"] for line in script["lines"]] + [script["cta"]]
+    if not words:
+        raise ValueError("sem word-timestamps")
+
+    n_words = len(words)
+    cursor = 0          # índice na lista global de palavras
+    bounds = []         # (start, end) por linha
+    prev_end = 0.0
+    matched_tokens = 0  # nº de tokens que casaram (p/ aferir confiança)
+    total_tokens = 0
+
+    for li, text in enumerate(all_texts):
+        line_toks = [_norm_token(t) for t in text.split()]
+        line_toks = [t for t in line_toks if t]  # descarta tokens que viram vazio
+        total_tokens += len(line_toks)
+
+        if cursor >= n_words:
+            # Acabaram as palavras antes das linhas → casamento falhou.
+            raise ValueError("word-timestamps acabaram antes das linhas do roteiro")
+
+        line_start = words[cursor][0] if cursor < n_words else prev_end
+        consumed = 0
+        for lt in line_toks:
+            if cursor >= n_words:
+                break
+            # Tenta casar o token da linha com a palavra atual; se não casar,
+            # tolera um pequeno deslize procurando até 2 palavras à frente.
+            wt = _norm_token(words[cursor][2])
+            if wt == lt:
+                matched_tokens += 1
+                cursor += 1
+                consumed += 1
+            else:
+                look = 1
+                hit = False
+                while look <= 2 and cursor + look < n_words:
+                    if _norm_token(words[cursor + look][2]) == lt:
+                        cursor += look + 1
+                        consumed += look + 1
+                        matched_tokens += 1
+                        hit = True
+                        break
+                    look += 1
+                if not hit:
+                    # Sem casamento: consome 1 palavra mesmo assim (mantém monotônico).
+                    cursor += 1
+                    consumed += 1
+
+        if consumed == 0:
+            # Linha não consumiu nenhuma palavra (ex.: linha só de pontuação).
+            # Usa o tempo corrente como ponto sem duração — evita divisão estranha.
+            line_end = prev_end
+        else:
+            line_end = words[cursor - 1][1]
+
+        # Garante monotonicidade (o end nunca pode recuar).
+        line_end = max(line_end, prev_end)
+        bounds.append((line_start if line_start >= prev_end else prev_end, line_end))
+        prev_end = line_end
+
+    # A última linha deve ir até o fim real do áudio (cobre cauda de silêncio/respiração).
+    if bounds:
+        last_start, _ = bounds[-1]
+        bounds[-1] = (last_start, max(prev_end, total_audio_duration))
+
+    # Confiança: se quase nada casou, o alinhamento é lixo → fallback.
+    if total_tokens > 0 and (matched_tokens / total_tokens) < 0.5:
+        raise ValueError(
+            f"casamento fraco ({matched_tokens}/{total_tokens} tokens) — fallback p/ aproximação"
+        )
+
+    # Converte os bounds (start,end) absolutos em durações por segmento.
+    durations = []
+    cum = 0.0
+    for (_s, e) in bounds:
+        d = max(0.0, e - cum)
+        durations.append(d)
+        cum = e
+
+    return durations, bounds
+
+
 def assemble_short(
     script: dict,
     broll_files: list[Optional[Path]],
@@ -1633,18 +2886,62 @@ def assemble_short(
             total_duration, MAX_SHORT_DURATION
         )
 
-    # Calcula duração de cada segmento de b-roll proporcional ao número de palavras
-    line_durations = compute_line_durations(script, total_duration)
+    # Duração de cada segmento de b-roll.
+    #   CANAL_DARK_CADENCE=1 (padrão): casa o FIM de cada linha com o `end` real da
+    #     última palavra dela (cadência na fala) lendo words.json do edge-tts.
+    #   =0 ou casamento falho: cai na aproximação por contagem de palavras.
+    # line_bounds = (start,end) absolutos por linha — usado pelo punch-in.
+    line_bounds: Optional[list] = None
+    use_cadence = os.environ.get("CANAL_DARK_CADENCE", "1").strip().lower() not in ("0", "false", "no")
+    words_ts = _load_word_timestamps(work_dir) if use_cadence else []
+    if words_ts:
+        try:
+            line_durations, line_bounds = compute_line_durations_from_words(
+                script, words_ts, total_duration
+            )
+            log.info("Cadência: durações casadas à fala real (words.json, %d palavras).", len(words_ts))
+        except Exception as exc:  # noqa: BLE001 — qualquer falha → aproximação
+            log.warning("Cadência por fala falhou (%s); usando aproximação por palavras.", exc)
+            line_durations = compute_line_durations(script, total_duration)
+            line_bounds = None
+    else:
+        line_durations = compute_line_durations(script, total_duration)
 
     # Duração máxima por shot — evita imagem congelada por períodos longos.
     # Se uma cena durar mais que MAX_SHOT_SEC, ela é dividida em sub-shots com
     # variações de Ken Burns (para imagens) ou cortes (para vídeos).
     max_shot_sec = float(os.environ.get("CANAL_DARK_MAX_SHOT", str(DEFAULT_MAX_SHOT_SEC)))
 
+    # HOOK mais rápido: nos primeiros ~3s do vídeo, usa um max_shot menor (cortes mais
+    # ágeis prendem a atenção logo no começo). Configurável por CANAL_DARK_HOOK_MAX_SHOT
+    # (segundos) e CANAL_DARK_HOOK_WINDOW (janela em segundos a partir do 0).
+    hook_max_shot = float(os.environ.get("CANAL_DARK_HOOK_MAX_SHOT", "2.2"))
+    hook_window = float(os.environ.get("CANAL_DARK_HOOK_WINDOW", "3.0"))
+
+    # Cada sub-shot abaixo deste piso vira "piscada" (zoompan precisa de frames).
+    min_sub_sec = float(os.environ.get("CANAL_DARK_MIN_SUB", "0.6"))
+
     log.info(
         "Montando %d segmentos de b-roll (duração total: %.1fs, max_shot=%.1fs)",
         len(broll_files), total_duration, max_shot_sec
     )
+
+    # Start ABSOLUTO (em segundos) de cada linha na timeline. Vem dos bounds reais
+    # (cadência) quando disponíveis; senão é o acumulado das durações aproximadas.
+    line_starts: list[float] = []
+    _acc = 0.0
+    for _li in range(len(line_durations)):
+        if line_bounds and _li < len(line_bounds):
+            line_starts.append(line_bounds[_li][0])
+        else:
+            line_starts.append(_acc)
+        _acc += line_durations[_li]
+
+    # Punch-in na palavra-chave (Frente C): SUTIL, atrás de flag p/ A/B testar.
+    punch_on = os.environ.get("CANAL_DARK_PUNCH", "0").strip().lower() in ("1", "true", "yes")
+    if punch_on and not words_ts:
+        log.info("CANAL_DARK_PUNCH ligado mas sem words.json; punch-in desativado nesta run.")
+        punch_on = False
 
     # 1. Prepara cada clipe de b-roll na resolução e duração corretas.
     #    Quando duration > max_shot_sec, divide em sub-shots com variação de movimento.
@@ -1652,70 +2949,93 @@ def assemble_short(
     clip_counter = 0  # índice global de clips (para nomes únicos de arquivo)
 
     for i, (broll, duration) in enumerate(zip(broll_files, line_durations)):
-        if duration <= max_shot_sec or max_shot_sec <= 0:
-            # Shot curto: comportamento normal.
-            # Para imagens, chama _ken_burns_clip com variante baseada no índice da cena.
-            # Para vídeos e None, delega a prepare_broll_segment (lógica original).
-            if broll is not None and broll.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
-                out_path_clip = work_dir / f"broll_ready_{clip_counter:03d}.mp4"
-                ready = _ken_burns_clip(broll, duration, out_path_clip, variant=i % 4)
+        # Normaliza para LISTA de imagens (suporta 1 imagem, várias distintas, ou None).
+        imgs = broll if isinstance(broll, list) else [broll]
+        if not imgs:
+            imgs = [None]
+
+        line_start = line_starts[i] if i < len(line_starts) else 0.0
+
+        # max_shot efetivo: no HOOK (início do vídeo) corta mais rápido.
+        eff_max_shot = max_shot_sec
+        if hook_window > 0 and line_start < hook_window and hook_max_shot > 0:
+            eff_max_shot = min(max_shot_sec, hook_max_shot) if max_shot_sec > 0 else hook_max_shot
+
+        # nº de sub-shots = o MAIOR entre o split por tempo (eff_max_shot) e o nº de imagens.
+        # Assim cada imagem distinta da cena ganha ao menos um sub-shot (mais variação).
+        if eff_max_shot and eff_max_shot > 0 and duration > eff_max_shot:
+            n_by_time = int(duration / eff_max_shot) + (1 if duration % eff_max_shot > 0.1 else 0)
+        else:
+            n_by_time = 1
+        n_sub = max(n_by_time, len(imgs))
+        # Piso anti-"piscada": não deixa o sub-shot cair abaixo de min_sub_sec.
+        # (mas respeita o nº de imagens distintas — cada uma merece ao menos 1 shot.)
+        if min_sub_sec > 0 and duration > 0:
+            max_subs_by_floor = max(len(imgs), int(duration / min_sub_sec))
+            n_sub = min(n_sub, max(1, max_subs_by_floor))
+        sub_dur = duration / n_sub
+        if n_sub > 1:
+            log.info(
+                "B-roll cena %d (%.1fs, t0=%.1fs): %d sub-shots de ~%.1fs, %d imagem(ns) distinta(s)",
+                i, duration, line_start, n_sub, sub_dur, len([x for x in imgs if x is not None]) or 1,
+            )
+
+        prev_src = object()   # sentinela p/ detectar repetição do mesmo arquivo
+        run_count = 0
+        for sub_i in range(n_sub):
+            # Distribui as imagens distintas igualmente pelos sub-shots.
+            cur = imgs[(sub_i * len(imgs)) // n_sub]
+            run_count = run_count + 1 if (cur is not None and cur == prev_src) else 0
+            prev_src = cur
+            variant = (i + sub_i) % 4  # varia o Ken Burns por cena e por sub-shot
+            out_path_sub = work_dir / f"broll_ready_{clip_counter:03d}.mp4"
+
+            # Punch-in: offset (em segundos, relativo ao início do sub-shot) da palavra
+            # de maior carga dentro da janela [sub_start, sub_start+sub_dur]. None = sem punch.
+            punch_at = None
+            if punch_on and cur is not None and cur.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                sub_start_abs = line_start + sub_i * sub_dur
+                punch_at = _punch_offset_for_window(words_ts, sub_start_abs, sub_dur)
+
+            if cur is None:
+                ready = create_solid_color_clip(FALLBACK_BG_COLOR, sub_dur, out_path_sub)
+            elif cur.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                ready = _ken_burns_clip(cur, sub_dur, out_path_sub, variant=variant, punch_at=punch_at)
             else:
-                # prepare_broll_segment cria broll_ready_{clip_counter:02d}.mp4
-                ready = prepare_broll_segment(broll, duration, clip_counter, work_dir)
+                # Vídeo: offset avança só enquanto o MESMO arquivo se repete em sub-shots.
+                offset_sec = run_count * sub_dur
+                vf_sub = (
+                    f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+                    f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+                    "fps=30,"
+                    "setpts=PTS-STARTPTS"
+                )
+                cmd_sub = [
+                    "ffmpeg", "-y",
+                    "-ss", str(offset_sec),
+                    "-stream_loop", "-1",
+                    "-i", str(cur),
+                    "-t", str(sub_dur),
+                    "-vf", vf_sub,
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
+                    "-pix_fmt", "yuv420p",
+                    "-r", "30",
+                    "-an",
+                    str(out_path_sub),
+                ]
+                res_sub = subprocess.run(cmd_sub, capture_output=True, text=True, timeout=120)
+                if res_sub.returncode != 0:
+                    log.warning(
+                        "Sub-shot %d/%d da cena %d falhou; usando fallback.\n%s",
+                        sub_i + 1, n_sub, i, res_sub.stderr[-400:]
+                    )
+                    ready = create_solid_color_clip(FALLBACK_BG_COLOR, sub_dur, out_path_sub)
+                else:
+                    ready = out_path_sub
             ready_clips.append(ready)
             clip_counter += 1
-        else:
-            # Shot longo: divide em sub-shots de até max_shot_sec segundos
-            n_sub = int(duration / max_shot_sec) + (1 if duration % max_shot_sec > 0.1 else 0)
-            sub_dur = duration / n_sub  # distribui igualmente (pode ser ligeiramente > max)
-            log.info(
-                "B-roll cena %d (%.1fs > %.1fs): dividido em %d sub-shots de ~%.1fs",
-                i, duration, max_shot_sec, n_sub, sub_dur
-            )
-            for sub_i in range(n_sub):
-                variant = (i * 4 + sub_i) % 4  # alterna 4 variantes de Ken Burns
-                out_path_sub = work_dir / f"broll_ready_{clip_counter:03d}.mp4"
-                if broll is None:
-                    ready = create_solid_color_clip(FALLBACK_BG_COLOR, sub_dur, out_path_sub)
-                elif broll.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
-                    # Imagem: cada sub-shot usa uma variante diferente de Ken Burns
-                    ready = _ken_burns_clip(broll, sub_dur, out_path_sub, variant=variant)
-                else:
-                    # Vídeo: usa offset temporal diferente para cada sub-shot
-                    # (re-encodar trecho do vídeo original a partir de offset calculado)
-                    offset_sec = sub_i * sub_dur
-                    vf_sub = (
-                        f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-                        f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
-                        "fps=30,"
-                        "setpts=PTS-STARTPTS"
-                    )
-                    cmd_sub = [
-                        "ffmpeg", "-y",
-                        "-ss", str(offset_sec),
-                        "-stream_loop", "-1",
-                        "-i", str(broll),
-                        "-t", str(sub_dur),
-                        "-vf", vf_sub,
-                        "-c:v", "libx264",
-                        "-preset", "fast",
-                        "-crf", "23",
-                        "-pix_fmt", "yuv420p",
-                        "-r", "30",
-                        "-an",
-                        str(out_path_sub),
-                    ]
-                    res_sub = subprocess.run(cmd_sub, capture_output=True, text=True, timeout=120)
-                    if res_sub.returncode != 0:
-                        log.warning(
-                            "Sub-shot %d/%d da cena %d falhou; usando fallback.\n%s",
-                            sub_i + 1, n_sub, i, res_sub.stderr[-400:]
-                        )
-                        ready = create_solid_color_clip(FALLBACK_BG_COLOR, sub_dur, out_path_sub)
-                    else:
-                        ready = out_path_sub
-                ready_clips.append(ready)
-                clip_counter += 1
 
     # 2. Concatena todos os clipes de b-roll usando o filter_complex concat
     #    Gera um arquivo de lista para o demuxer concat do FFmpeg
@@ -1768,11 +3088,25 @@ def assemble_short(
     # Detecta fonte disponível (Montserrat ou fallback Arial)
     font_name = _resolve_subtitle_font()
 
-    # Dimensiona fontsdir se Montserrat foi encontrada localmente
+    # fontsdir: instrui o libass a achar o .ttf local. Vale p/ QUALQUER fonte custom
+    # (Montserrat OU Bebas) — antes só Montserrat, então a Bebas caía no fallback.
+    #
+    # ⚠️ ARMADILHA WINDOWS: um caminho ABSOLUTO ('C:/Users/...') no fontsdir QUEBRA o
+    # parser do filtro subtitles (o 'C:' é lido como separador de opção). Solução
+    # (mesmo padrão do .srt): o ffmpeg roda com cwd na pasta do .ass, então COPIAMOS
+    # o .ttf p/ essa pasta e usamos 'fontsdir=.' — relativo, sem dois-pontos.
     fontsdir_opt = ""
-    if font_name == SUBTITLE_FONT_PREFERRED and ASSETS_FONTS_DIR.exists():
-        # fontsdir instrui o libass a procurar .ttf nesta pasta
-        fontsdir_opt = f":fontsdir='{ASSETS_FONTS_DIR.as_posix()}'"
+    if font_name != SUBTITLE_FONT_FALLBACK and ASSETS_FONTS_DIR.exists():
+        import shutil as _shutil
+        _ttf_key = "montserrat" if font_name == SUBTITLE_FONT_PREFERRED else "bebas"
+        for _ttf in ASSETS_FONTS_DIR.glob("*.ttf"):
+            if _ttf_key in _ttf.name.lower():
+                try:
+                    _shutil.copy2(_ttf, srt_path.parent / _ttf.name)
+                    fontsdir_opt = ":fontsdir=."
+                except Exception as _exc:
+                    log.warning("Não consegui copiar a fonte p/ cwd (%s); libass pode usar fallback.", _exc)
+                break
 
     # Configuração por posição
     if sub_pos == "center":
@@ -1799,7 +3133,18 @@ def assemble_short(
     _SUB_FONT_RATIO = float(os.environ.get("SUB_FONT_RATIO", "0.075"))
     _base_font_size = int(round(SUBTITLE_PLAY_RES_Y * _SUB_FONT_RATIO))  # ≈ 144
 
-    if sub_style_env == "punchy":
+    # O .ass do karaokê é construído com 1 evento/cue + \kf. Como o force_style do
+    # libass SOBRESCREVE o FontSize embutido no .ass, definimos aqui um tamanho
+    # menor (≈ 6% da altura ≈ 115px) p/ Bebas Neue caber em 1–2 linhas sem virar
+    # parede de texto. Configurável por SUB_KARAOKE_FONT_RATIO.
+    is_ass = srt_name.lower().endswith(".ass")
+    if is_ass:
+        _kara_ratio = float(os.environ.get("SUB_KARAOKE_FONT_RATIO", "0.060"))
+        font_size = int(round(SUBTITLE_PLAY_RES_Y * _kara_ratio))
+        bold = 1
+        log.info("Legenda KARAOKE (.ass): FontSize=%d (~%.0f%% PlayResY), \\kf nativo, 1 evento/cue",
+                 font_size, _kara_ratio * 100)
+    elif sub_style_env == "punchy":
         # Punchy: ~15% maior que clean, poucas palavras por cue
         font_size = int(round(_base_font_size * 1.15))
         bold = 1
@@ -1899,40 +3244,105 @@ def assemble_short(
 # (e) METADATA DE PUBLICAÇÃO
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _build_image_credits_block(out_dir: Path) -> str:
+def _flatten_broll_files(broll_files: list) -> list:
     """
-    Lê o CREDITS.jsonl gerado pelo image_providers nesta run e formata
-    um bloco de créditos para incluir na descrição do vídeo.
-
-    Apenas entradas com attribution preenchida aparecem no bloco de texto —
-    CC0/PD não exigem crédito mas são incluídas com URL de origem para transparência.
-    Retorna string vazia se o arquivo não existir ou não tiver entradas.
+    Achata a lista de b-roll da timeline em Paths únicos, NA ORDEM de aparição.
+    Cada item de broll_files pode ser None, um Path, ou uma LISTA de Paths
+    (várias imagens distintas numa cena). Dedupa preservando ordem — o CTA
+    reusa o b-roll anterior, então o mesmo arquivo aparece 2x e não deve gerar
+    crédito duplicado.
     """
-    credits_path = out_dir / "CREDITS.jsonl"
-    # Também procura na pasta cwd/out (padrão do image_providers)
-    if not credits_path.exists():
-        credits_path = Path.cwd() / "out" / "CREDITS.jsonl"
-    if not credits_path.exists():
-        return ""
-
-    lines = []
-    try:
-        for raw in credits_path.read_text(encoding="utf-8").splitlines():
-            raw = raw.strip()
-            if not raw:
+    seen: set = set()
+    flat: list = []
+    for item in broll_files or []:
+        if item is None:
+            continue
+        candidates = item if isinstance(item, (list, tuple)) else [item]
+        for p in candidates:
+            if p is None:
                 continue
-            entry = json.loads(raw)
-            provider = entry.get("provider", "")
-            license_str = entry.get("license", "")
-            attribution = entry.get("attribution", "")
-            source_url = entry.get("source_url", "")
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            flat.append(Path(p))
+    return flat
+
+
+def _credit_for_broll_file(path: Path) -> Optional[str]:
+    """
+    Resolve UMA linha de crédito honesta para 1 arquivo de b-roll que ENTROU
+    na timeline. Fonte de verdade = o próprio arquivo (não um log acumulado).
+
+    Estratégia, na ordem:
+      1) Sidecar de metadata do image_providers ('<stem>.json' no out_dir ou no
+         img_cache) → usa attribution/license/source_url reais. Cobre os bancos
+         (Wikimedia/Openverse/archive.org/Civitai) do fluxo híbrido.
+      2) Sem sidecar → classifica pelo prefixo do nome do arquivo:
+           - 'broll_ai_*'   → imagem AI-generated (Pollinations/Cloudflare/ImageRouter FLUX)
+           - 'fandom_char_*'→ One Piece Wiki (Fandom) — IP Toei/Shueisha
+           - 'broll_*.mp4'  → vídeo de stock Pexels
+    Retorna None se o arquivo não rende crédito relevante (não deveria ocorrer).
+    """
+    stem = path.stem
+    name = path.name.lower()
+
+    # (1) Sidecar de metadata (mesmo stem). O .jpg é copiado pro out_dir, mas o
+    #     .json fica no img_cache → procura nos dois lugares.
+    sidecar_dirs = [path.parent]
+    try:
+        sidecar_dirs.append(Path.cwd() / "out" / "img_cache")
+    except Exception:
+        pass
+    env_cache = os.environ.get("IMG_CACHE_DIR", "").strip()
+    if env_cache:
+        sidecar_dirs.append(Path(env_cache))
+
+    for d in sidecar_dirs:
+        meta_path = d / f"{stem}.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                break
+            provider = meta.get("provider", "")
+            license_str = meta.get("license", "")
+            attribution = meta.get("attribution", "")
+            source_url = meta.get("source_url", "")
             if attribution:
-                lines.append(f"  {attribution} ({license_str}) — {source_url}")
-            elif source_url:
-                lines.append(f"  {provider.capitalize()}: {source_url} ({license_str})")
-    except Exception as exc:
-        log.warning("Não foi possível ler CREDITS.jsonl: %s", exc)
-        return ""
+                return f"  {attribution} ({license_str}) — {source_url}"
+            if source_url:
+                return f"  {provider.capitalize()}: {source_url} ({license_str})"
+            return None
+
+    # (2) Classificação por prefixo (arquivos gerados sem sidecar).
+    if name.startswith("broll_ai_"):
+        return "  AI-generated image (FLUX via Pollinations/Cloudflare/ImageRouter)"
+    if name.startswith("fandom_char_"):
+        return "  One Piece Wiki (Fandom) — https://onepiece.fandom.com/"
+    if name.startswith("broll_") and name.endswith(".mp4"):
+        return "  Stock footage from Pexels (https://www.pexels.com/)"
+    return None
+
+
+def _build_image_credits_block(broll_files: list) -> str:
+    """
+    Formata o bloco "Image credits:" da descrição a partir das imagens de b-roll
+    que ENTRARAM na timeline final DESTE vídeo, na ordem, 1:1.
+
+    NÃO lê mais o CREDITS.jsonl acumulado (que misturava runs/temas antigos e
+    creditava imagens que nem aparecem no vídeo). Cada crédito vem do arquivo
+    realmente usado: sidecar de metadata p/ bancos, ou classificação por prefixo
+    p/ AI/Fandom/Pexels. Retorna string vazia se nada render crédito.
+    """
+    lines: list = []
+    seen_lines: set = set()
+    for path in _flatten_broll_files(broll_files):
+        line = _credit_for_broll_file(path)
+        if not line or line in seen_lines:
+            continue
+        seen_lines.add(line)
+        lines.append(line)
 
     if not lines:
         return ""
@@ -1940,13 +3350,15 @@ def _build_image_credits_block(out_dir: Path) -> str:
     return "Image credits:\n" + "\n".join(lines)
 
 
-def build_publication_metadata(script: dict, short_path: Path) -> dict:
+def build_publication_metadata(script: dict, short_path: Path,
+                               broll_files: Optional[list] = None) -> dict:
     """
     Gera o metadata.json com título, descrição e hashtags formatados
     para cada plataforma alvo. Este arquivo é lido pelo n8n para publicar via Postiz.
 
-    Se CREDITS.jsonl existir em out_dir (gerado pelo image_providers), o bloco
-    de créditos é anexado à descrição do YouTube.
+    O bloco de créditos reflete EXATAMENTE as imagens de b-roll que entraram na
+    timeline final deste vídeo (via broll_files), 1:1 — sem vazamento de cache
+    de runs/temas antigos.
     """
     title = script["title"]
     hashtags_str = " ".join(script.get("hashtags", []))
@@ -1957,9 +3369,8 @@ def build_publication_metadata(script: dict, short_path: Path) -> dict:
     # Aviso obrigatório sobre conteúdo de IA (boa prática; obrigatório no YouTube se "realistic")
     ai_disclosure = "This video was created with AI assistance (voice & visuals). #AIContent"
 
-    # Bloco de créditos de imagem (do image_providers, se houver)
-    out_dir = short_path.parent
-    credits_block = _build_image_credits_block(out_dir)
+    # Bloco de créditos: SÓ o b-roll efetivamente usado nesta run.
+    credits_block = _build_image_credits_block(broll_files or [])
     credits_section = f"\n\n{credits_block}" if credits_block else ""
 
     metadata = {
@@ -2112,20 +3523,176 @@ def run_pipeline(
     used_broll_ids: set = set()
     vctx = script.get("visual_context") or {}
 
-    for i, query in enumerate(all_queries):
-        # Verifica se há imagem de referência forçada para esta posição
-        if i < len(ref_images):
-            ref_img = ref_images[i]
-            log.info("B-roll linha %d: usando imagem de referência '%s'", i, ref_img.name)
-            broll_files.append(ref_img)
-        # CTA geralmente não precisa de b-roll específico — reutiliza o último
-        elif i == len(all_queries) - 1 and len(broll_files) > 0:
-            # Reutiliza o último b-roll para o CTA (economiza quota da API)
-            broll_files.append(broll_files[-1])
-            log.info("B-roll do CTA: reutilizando b-roll anterior.")
-        else:
-            bf = fetch_broll(query, broll_source, broll_dir, i, vctx=vctx, used_ids=used_broll_ids)
-            broll_files.append(bf)
+    # ── One Piece: tenta personagem certo via Fandom/Safebooru ────────────────
+    # Mapa de apelidos comuns para o título canônico do Fandom One Piece Wiki.
+    _OP_ALIAS: dict = {
+        "imu": "Nerona_Imu",
+        "joy boy": "Joy_Boy",
+        "joyboy": "Joy_Boy",
+        "luffy": "Monkey_D._Luffy",
+        "monkey d luffy": "Monkey_D._Luffy",
+        "robin": "Nico_Robin",
+        "nico robin": "Nico_Robin",
+        "zoro": "Roronoa_Zoro",
+        "roronoa zoro": "Roronoa_Zoro",
+        "shanks": "Shanks",
+        "blackbeard": "Marshall_D._Teach",
+        "marshall d teach": "Marshall_D._Teach",
+        "loki": "Loki",
+        "elbaf": "Elbaf",
+    }
+
+    def _extract_entities(texts: list) -> list:
+        """
+        Extrai entidades nomeadas simples (sequências de palavras Capitalizadas)
+        dos textos fornecidos. Retorna lista deduplicada, ordem de aparição.
+        """
+        combined = " ".join(texts)
+        # Captura sequências de 1 a 4 palavras capitalizadas (não stopwords puras)
+        raw_matches = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b', combined)
+        # Dedup preservando ordem
+        seen: set = set()
+        entities: list = []
+        for m in raw_matches:
+            key = m.lower()
+            if key not in seen and len(m) > 2:
+                seen.add(key)
+                entities.append(m)
+        return entities
+
+    def _op_fandom_title(entity: str) -> str:
+        """Resolve apelido → título canônico do Fandom; senão converte espaços em _."""
+        return _OP_ALIAS.get(entity.lower(), entity.replace(" ", "_"))
+
+    # Stopwords: sequências capitalizadas que NÃO são personagem (evita gastar
+    # fetch com "The", "Erased", "Year War World Gov" que a regex gulosa captura).
+    _OP_STOPWORDS = {
+        "the", "a", "an", "and", "but", "war", "world", "year", "secret", "erased",
+        "the secret war between", "year war world gov", "world gov", "secret war",
+    }
+
+    # Pré-VALIDA as entidades do canal one-piece: só entra quem resolve numa página
+    # real do Fandom (com imagem). Para cada entidade válida guardamos os TERMOS de
+    # match (nome + apelidos) para depois casar com a FALA de cada cena — assim,
+    # quando a narração fala "World Government", entra o SÍMBOLO do WG; quando fala
+    # "Imu", entra o Imu. Imagem segue a fala (contextual), não a ordem.
+    niche_env = os.environ.get("CANAL_DARK_NICHE", "").strip().lower()
+    _op_char_entries: list = []   # [{terms:set, img:Path, label:str}] em ordem de validação
+    # CONTROLADOR ONE-PIECE = DEFAULT do nicho (desacoplado de ALLOW_ANIME). Ele faz:
+    #   • personagens (broll_kind='character') → render IA FLUX on-brand (NUNCA web/anime real);
+    #   • cenário/objeto (broll_kind='scenery'|'object') → tenta FOTO REAL livre (lane WEB
+    #     burn: wikimedia/openverse/archive.org, só PD/CC0/CC-BY/CC-BY-SA) e, em qualquer
+    #     dúvida/falha, cai pro render IA.
+    # ALLOW_ANIME volta a significar SÓ o caminho de FRAMES BOORU/anime REAIS (Content ID
+    # Toei/Shueisha) — que segue OFF/indesejado e NÃO é necessário pra ligar o controlador.
+    _op_mode = (niche_env == "one-piece-theories-and-stories")
+    if _op_mode:
+        entity_texts = [topic or "", script.get("title", "")]
+        raw_entities = _extract_entities(entity_texts)
+        log.info("[one-piece] Entidades brutas: %s", raw_entities)
+        use_fandom = _op_use_fandom_stills()
+        import image_providers as _ip
+        seen_titles: set = set()
+
+        def _op_entity_terms(entity: str, fandom_title: str) -> set:
+            """Termos de match do entry: nome extraído + título Fandom + apelidos."""
+            terms = {entity.lower(), fandom_title.replace("_", " ").lower()}
+            for alias_k, alias_v in _OP_ALIAS.items():
+                if alias_v == fandom_title:
+                    terms.add(alias_k)
+            return terms
+
+        for entity in raw_entities:
+            if entity.lower() in _OP_STOPWORDS:
+                continue
+            fandom_title = _op_fandom_title(entity)
+            if fandom_title in seen_titles:
+                continue
+            seen_titles.add(fandom_title)
+
+            if not use_fandom:
+                # PURE-AI DEFAULT (v4): NÃO baixa still real do Fandom. Resolve a entidade
+                # pra um subject da biblioteca (traços de assinatura, inclusive Loki via
+                # 'loki') e gera um render IA cinematográfico. Entidade que não mapeia pra
+                # nenhum subject conhecido é ignorada (o _OP_CONCEPT_MAP da cena cobre).
+                subj = _OP_TITLE_SUBJECT.get(fandom_title)
+                if not subj:
+                    subj, _ = _op_pick_subject(entity.lower(), "")
+                if subj not in _OP_SUBJECT_LIBRARY:
+                    log.info("[one-piece] '%s' não mapeia subject — coberto pelo concept map.", entity)
+                    continue
+                _op_char_entries.append({
+                    "terms": _op_entity_terms(entity, fandom_title), "img": None,
+                    "label": entity, "title": fandom_title, "ai_subject": subj,
+                })
+                log.info("[one-piece] Entidade '%s' → render IA on-brand (subject '%s').", entity, subj)
+                continue
+
+            # Caminho OPCIONAL (OP_USE_FANDOM_STILLS=1): valida via imagem real do Fandom.
+            try:
+                img = _ip._prov_fandom_pageimage(fandom_title, broll_dir)
+            except Exception as exc:
+                log.warning("[one-piece] Erro ao validar '%s': %s", entity, exc)
+                img = None
+            if img is not None:
+                _op_char_entries.append({
+                    "terms": _op_entity_terms(entity, fandom_title), "img": img,
+                    "label": entity, "title": fandom_title,
+                    # ai_subject: se o personagem tem imagem real fraca (ex.: Imu = painel cru
+                    # de mangá), preferimos um render IA estilizado no lugar do .png real.
+                    "ai_subject": _OP_PREFER_AI_SUBJECT.get(fandom_title),
+                })
+                log.info("[one-piece] Entidade VÁLIDA: '%s' (match: %s) → %s%s",
+                         entity, sorted(_op_entity_terms(entity, fandom_title)), img.name,
+                         " [render IA preferido]" if _OP_PREFER_AI_SUBJECT.get(fandom_title) else "")
+            else:
+                log.info("[one-piece] '%s' não resolveu no Fandom — descartado.", entity)
+        log.info("[one-piece] %d entidade(s) p/ casar com a narração (pure-ai=%s).",
+                 len(_op_char_entries), not use_fandom)
+
+    # Texto da fala de cada cena (paralelo a all_queries) p/ o match contextual.
+    all_texts = [line["text"] for line in script["lines"]] + [script.get("cta", "")]
+    # broll_kind por cena (SÓ one-piece, paralelo a all_queries; +1 p/ o CTA = 'character'
+    # por segurança). Roteia a FONTE da imagem: 'character' → render IA; 'scenery'/'object'
+    # → tenta foto real livre (lane WEB) e cai pra IA em qualquer dúvida.
+    all_kinds = [str(line.get("broll_kind", "character")).strip().lower()
+                 for line in script["lines"]] + ["character"]
+
+    if _op_mode:
+        # Canal One Piece: planeja todas as cenas e gera as imagens de IA EM PARALELO
+        # (mais rápido). Cada cena já vem com 1+ imagens DISTINTAS on-brand. Personagens
+        # = render IA; cenário/objeto pode ser FOTO REAL livre (PD/CC) da lane WEB.
+        broll_files = _build_op_broll(
+            all_queries, all_texts, all_kinds, _op_char_entries, ref_images, vctx, broll_dir,
+        )
+    else:
+        for i, query in enumerate(all_queries):
+            line_text = all_texts[i] if i < len(all_texts) else ""
+            is_cta = (i == len(all_queries) - 1)
+            # nº de imagens DISTINTAS desta linha (~1 a cada CANAL_DARK_SEC_PER_IMAGE s).
+            n_imgs = 1 if is_cta else _estimate_n_imgs(line_text)
+
+            if i < len(ref_images):
+                ref_img = ref_images[i]
+                log.info("B-roll linha %d: usando imagem de referência '%s'", i, ref_img.name)
+                broll_files.append(ref_img)
+            elif is_cta and len(broll_files) > 0:
+                broll_files.append(broll_files[-1])
+                log.info("B-roll do CTA: reutilizando b-roll anterior.")
+            else:
+                # Demais nichos: busca n imagens DISTINTAS (seed/índice varia → composições
+                # diferentes na lane de IA do híbrido; dedup de clipes no Pexels).
+                imgs = []
+                for k in range(n_imgs):
+                    bf = fetch_broll(query, broll_source, broll_dir, i * 10 + k,
+                                     vctx=vctx, used_ids=used_broll_ids)
+                    if bf is not None:
+                        imgs.append(bf)
+                if not imgs:
+                    broll_files.append(None)
+                else:
+                    broll_files.append(imgs if len(imgs) > 1 else imgs[0])
+                log.info("B-roll cena %d: %d imagem(ns) distinta(s).", i, max(1, len(imgs)))
 
     # ── (d) MONTAGEM ───────────────────────────────────────────────────────────
     short_path = assemble_short(
@@ -2139,7 +3706,7 @@ def run_pipeline(
     )
 
     # ── (e) METADATA DE PUBLICAÇÃO ─────────────────────────────────────────────
-    metadata = build_publication_metadata(script, short_path)
+    metadata = build_publication_metadata(script, short_path, broll_files=broll_files)
     metadata["script"] = script  # inclui o roteiro completo para rastreabilidade
 
     metadata_path = out_dir / "metadata.json"
