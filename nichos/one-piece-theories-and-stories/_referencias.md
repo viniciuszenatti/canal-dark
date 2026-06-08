@@ -3,7 +3,7 @@ projeto: canal-dark
 tipo: banco-de-referencias
 nicho: one-piece-theories-and-stories
 tags: [canal-dark, one-piece, teorias, referencias, pesquisa]
-atualizado: 2026-05-31
+atualizado: 2026-06-02
 ---
 
 # One Piece — Banco de Referências
@@ -25,7 +25,7 @@ atualizado: 2026-05-31
 | ✅ | comunidade | WorstGen — One Piece Theories | https://worstgen.alwaysdata.net/forum/forums/one-piece-theories.7/ | Mineração: ~1740 threads pra ver o que já foi esgotado (originalidade) e o que tem base no canon. Não citar como fonte de fato. | atual |
 
 ## Ideias com potencial (gancho pronto — todas ancoradas em canon real)
-1. **Joy Boy vs Imu** — *"the World Government spent 800 years hunting a fruit they knew would awaken — because last time, they lost."* (Egghead, cap. 1060+).
+1. **Joy Boy vs Imu** — *"the World Government spent 800 years hunting a fruit they knew would awaken — because last time, they lost."* (Nika fruit reveal cap. 1043–1044; derrota do Joy Boy há 800 anos no broadcast do Vegapunk cap. 1114–1115 — checar [[_canon-kb]]).
 2. **Gear 5 foreshadowed no cap. 569** — *"Oda hid Gear 5 in a chapter number — in 2009, 13 years before the reveal."* (goroawase 569 = Go-Mu-Ki).
 3. **Sangue especial do Blackbeard** — *"the answer to One Piece's biggest power mystery isn't a Devil Fruit — it's his bloodline."* (cap. 1138, 2025).
 4. **A traição do Kanjuro** — *"Oda hid a traitor in plain sight for 6 years. One detail — and almost nobody caught it."* (era canhoto).

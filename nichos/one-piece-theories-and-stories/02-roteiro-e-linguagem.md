@@ -3,7 +3,7 @@ projeto: canal-dark
 nicho: one-piece-theories-and-stories
 tipo: roteiro-e-linguagem
 tags: [canal-dark, nicho, one-piece, roteiro]
-atualizado: 2026-05-31
+atualizado: 2026-06-01
 ---
 
 # One Piece — roteiro e linguagem
@@ -18,11 +18,40 @@ Canal: **Poneglyph Theory**. Narrador: **"Cobb"**, um fã-analista de One Piece,
 - **Assinatura:** Abertura *"Alright, follow me on this —"* · marca a fronteira *"This part is confirmed —"* (canon, COM capítulo/SBS) e *"Now here's my theory —"* (especulação) · fecho *"Canon or cope? Tell me I'm wrong down below."*
 - **Por que é único:** narrador nomeado + tese autoral própria (não o resumo do Ohara) + tique verbal de honestidade canon/teoria. Oposto do roteiro-fôrma de IA (RISCO #1).
 
+## 🎙️ SCRIPT VOICE / VOCABULARY mission (Controller v4 — vale pra TODA narração deste canal)
+> Esta é a metade-VOZ do Controller v4. Faz a narração soar como criador de teoria de One Piece de verdade (Ohara / GrandLineReview / r/OnePiece) — NÃO um explainer genérico. Escreva o roteiro **em inglês**.
+
+**MISSÃO:** falar de fã-pra-fã. Vocabulário e cadência nativos da comunidade One Piece. Confiante, hype-mas-informado.
+
+**T1 — LÉXICO DO FANDOM:** sempre o termo in-universe em vez do genérico. "Poneglyph" (não "ancient stone tablet"); "Conqueror's Haki" (não "willpower"); "the Void Century" (não "a lost era"); "the Gorosei" (não "the leaders").
+
+**T2 — CADÊNCIA DE CRIADOR:** frases curtas e punchy que sobem pra uma virada. Use batidas conectivas como: *"here's where it gets crazy"*, *"Oda's been setting this up since…"*, *"this is the part nobody talks about"*, *"and it gets better"*.
+
+**T3 — GANHAR CREDIBILIDADE (âncoras de canon):** cite capítulo/SBS quando real (*"as of chapter 1060…"*, *"Oda confirmed in an SBS…"*). Mantenha FATO vs TEORIA honesto: enquadre teoria COMO teoria (*"here's my theory"*, nunca *"Oda confirmed"* pra especulação), mesmo soando confiante.
+
+**T4 — MATAR FRASE GENÉRICA (ban-list):** PROIBIDO *"today we'll explore"*, *"let's dive in"*, *"in conclusion"*, *"without further ado"*; sem tom de livro-didático/Wikipédia; não superexplicar o básico que o fandom já sabe.
+
+**T5 — HOOK + CTA de comunidade:** abre com uma afirmação fã-isca; fecha com isca de debate (*"Canon or cope? Drop your theory."*, *"Am I cooking, or coping?"*).
+
+**WORD BANK** (use com naturalidade, não despeje tudo de uma vez):
+- *Lore:* Void Century, the Great Kingdom, Will of D, the D., Joy Boy, Nika / Sun God, Liberation, Poneglyphs / Road Poneglyphs, the One Piece, Laugh Tale, Ancient Weapons (Pluton/Poseidon/Uranus), the Reverie, Inherited Will, the Dawn.
+- *Power:* Haki, Conqueror's / Armament / Observation, Devil Fruit, Awakening, Gear 5, Advanced Haki.
+- *Powers-that-be:* World Government, the Five Elders / Gorosei, Imu(-sama), Celestial Dragons, the Yonko, Marines, Cipher Pol / CP0.
+- *Gíria de criador (com parcimônia, on-brand):* "Oda cooked", "peak fiction", "the foreshadowing is insane", "this changes everything", "no one's talking about this", "if you've been paying attention".
+
+**DO / DON'T (calibração):**
+- ❌ *"Today we'll discuss an ancient era called the Void Century, a mysterious period in history."*
+- ✅ *"For 800 years the World Government has buried the Void Century — and Imu is the reason why."*
+- ❌ *"Luffy has a special power called Gear 5."*
+- ✅ *"Gear 5 isn't a power-up. It's the return of Nika — the one thing the World Government has feared for centuries."*
+
+**GUARDRAIL (honestidade):** soar confiante ≠ mentir sobre canon. Teoria fica marcada como teoria; fato fica ancorado a capítulo/SBS. Hype o mistério, não fabrique a resposta.
+
 ## Tom de voz
 **Fã-pra-fã, hype e energético.** Oposto do true crime: aqui é rápido, empolgado, com **opinião forte**. O público respeita quem **arrisca uma tese** com convicção (morno = ignorado). Usar o **vocabulário do fandom** sinaliza "sou um de vocês".
 
 ## Vocabulário do fandom (usar com naturalidade)
-nakama, Haki (Conqueror's/Observation/Armament), poneglyphs, Will of D, Void Century, Devil Fruit / Akuma no Mi, Yonkou, Gear 5, "peak fiction", "Oda cooked", foreshadowing. (Sem exagerar a ponto de excluir o casual.)
+nakama, Haki (Conqueror's/Observation/Armament), poneglyphs, Will of D, Void Century, Devil Fruit / Akuma no Mi, Yonko, Gear 5, Nika, Joy Boy, SBS, "peak fiction", "Oda cooked", foreshadowing, headcanon, cope. (Sem exagerar a ponto de excluir o casual.)
 
 ## Beats do roteiro (Short de 45-60s, ~150-180 palavras — variar a forma entre vídeos)
 Adapta o esqueleto de 5 beats de [[00-tecnicas-shorts-comum]] pro formato "teoria de One Piece":
@@ -35,6 +64,15 @@ Adapta o esqueleto de 5 beats de [[00-tecnicas-shorts-comum]] pro formato "teori
 50-60s  CTA de debate — "Canon or cope? Tell me I'm wrong down below." (gancho de Part 2 se for série).
 ```
 **Regra dos dois trilhos (faceless):** retenção depende do arco do roteiro E da troca de b-roll a cada 2-4s. Cada `line` carrega 1 ideia e merece uma imagem nova. **Varie a forma** (nº de lines, abertura, fecho) entre vídeos — dois roteiros idênticos viram fôrma.
+
+## Tópicos que rendem (o que explode — detalhe em [[_shorts-playbook]])
+Ranqueado por watch-time + comentário no fandom:
+1. **Foreshadowing / "did you notice"** — pão-com-manteiga do gênero; um par setup→payoff limpo COM o nº do capítulo.
+2. **Explicação de capítulo recente** — surfa o pico semanal; um reveal + uma teoria, sempre com âncora **"as of chapter N"**.
+3. **Power scaling / ranking** — MAIOR debate-bait, MAS o formato mais criticado → toda alegação ancorada num **feat do mangá** (senão lê como cope).
+4. **Backstory condensada** — uma tragédia/arco em 45s (Robin/Ohara, Law, Kuma); baixa polêmica, lane "respeitoso + bem pesquisado".
+5. **"Cope take" contrarian** — tese contrária mas defensável ("Imu já perdeu") pra provocar comentário; com parcimônia e sempre embasada.
+> **Evergreen wells** (nunca envelhecem): Void Century, Will of D., Imu, the One Piece, Joy Boy, DF awakening.
 
 ## Taxonomia de ganchos (escolher 1, nunca misturar)
 - **Foreshadow-reveal** — *"Oda told us [X] [N] years ago, and almost nobody noticed."*
@@ -49,6 +87,7 @@ Adapta o esqueleto de 5 beats de [[00-tecnicas-shorts-comum]] pro formato "teori
 O público hardcore detecta erro de lore na hora e isso derruba o canal.
 - **Canon** (só com respaldo — hierarquia: mangá/wiki > SBS > databook): introduzir com **"This part is confirmed —"** e **CITAR o número do capítulo ou o volume do SBS**. Sem número, NÃO pode usar "confirmed".
 - **Teoria** (leitura própria): introduzir com **"Now here's my theory —"**. Toda inferência de intenção do Oda é TEORIA, não canon.
+- **Conferir contra a bíblia de canon:** toda alegação marcada *"This part is confirmed —"* deve ser checada contra [[_canon-kb]] (ancorada em cap/SBS) ANTES de ir pro roteiro — não confiar na memória.
 - **Âncora temporal obrigatória** quando o canon é recente: *"as of chapter [N]"* (o mangá anda ~4 caps/mês; protege contra debunk).
 - ❌ PROIBIDO: "Oda CONFIRMED" / "it's REVEALED" pra especulação. O guardrail do Telegram reprova.
 - **Tese forte e debatível** (não platitude): *"this means Imu already lost"* > *"the truth is safe"*. Morno mata o engajamento que é o ponto do nicho.
@@ -133,4 +172,5 @@ O público hardcore detecta erro de lore na hora e isso derruba o canal.
 Separar **canon** de **teoria** no próprio roteiro, citando capítulo/SBS no canon. O público hardcore detecta erro de lore na hora e isso derruba o canal.
 
 > Riscos (copyright é o grande): [[03-riscos-e-conformidade]]. Referências verificadas: [[_referencias]].
+> **Verdade de canon (FATO×TEORIA, ancorado em cap/SBS)**: [[_canon-kb]]. **Empacotamento do gênero (hooks, tópicos, visual)**: [[_shorts-playbook]].
 > **Voz com benchmark dos canais reais (Ohara/GrandLineReview/Tekking101)**: ver [[05-linguagem-e-referencias]].
