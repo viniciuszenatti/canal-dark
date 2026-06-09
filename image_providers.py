@@ -55,11 +55,15 @@ log = logging.getLogger("short_factory")
 
 BURN_ALLOWLIST = {
     "public domain",
+    "public domain mark",
+    "pdm",
+    "no restrictions",
     "cc0",
     "cc0 1.0",
     "cc-by 4.0",
     "cc-by-sa 4.0",
     "cc-by-sa 3.0",
+    "cc-by-sa 3.0 de",
     "cc-by 2.0",
     "cc-by-sa 2.0",
 }
@@ -100,6 +104,26 @@ _AIHORDE_LAST_SUBMIT = [0.0]  # mutável p/ compartilhar entre threads (list = r
 # Espaçamento mínimo entre submissões (s). 0.6 → ~1.6 req/s, com folga sob o teto
 # de 2/s mesmo com jitter de rede. Tunável por env p/ chaves com prioridade maior.
 _AIHORDE_MIN_SUBMIT_GAP = float(os.environ.get("AIHORDE_MIN_SUBMIT_GAP", "0.6"))
+# Tempo máximo (s) que o poll de status do AI Horde espera a geração concluir antes
+# de desistir e cair pro próximo gerador. A fila ANÔNIMA é compartilhada e pode demorar:
+# 180s (default antigo) estourava em horário de pico e jogava tudo pro Cloudflare. 300s
+# dá mais fôlego sem travar a fábrica. Tunável por env AIHORDE_POLL_TIMEOUT.
+_AIHORDE_POLL_TIMEOUT = float(os.environ.get("AIHORDE_POLL_TIMEOUT", "300"))
+
+# ---------------------------------------------------------------------------
+# Cloudflare Workers AI — throttle global de submissão (anti-preto)
+# ---------------------------------------------------------------------------
+# A conta grátis do Cloudflare (10.000 neurons/dia) tem rate-limit por janela curta: sob
+# rajada de submissões paralelas (One Piece dispara vários shots ao mesmo tempo) ela devolve
+# HTTP 429, e o caminho atual caía direto pra IA seguinte/preto sem retry. Mesmo padrão do
+# AI Horde: serializamos SÓ o momento do POST (espaçamento mínimo entre submissões) + 1 retry
+# no 429 transitório. O gate é COMPARTILHADO entre _prov_cloudflare (lane generate) e
+# short_factory._fetch_cloudflare (caminho do One Piece) — uma casa só pra constante, pra o
+# throttle valer nos DOIS caminhos. Se a cota DIÁRIA estourou (429 persistente), o 1 retry
+# falha e ele cai rápido pro próximo gerador (não trava).
+_CLOUDFLARE_SUBMIT_LOCK = threading.Lock()
+_CLOUDFLARE_LAST_SUBMIT = [0.0]  # mutável p/ compartilhar entre threads (list = ref)
+_CF_MIN_SUBMIT_GAP = float(os.environ.get("CF_MIN_SUBMIT_GAP", "1.5"))
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +222,8 @@ def _sha1(data: bytes) -> str:
 # prompt/style/avoid muda a imagem — então só nestes a cache key precisa de prompt_sig.
 # Fontes de FOTO REAL (wikimedia/openverse/internetarchive/fandom/civitai/pexels_photo)
 # ignoram o prompt → mantêm cache estável (mesma query = mesma foto, cache hit preservado).
-_GENERATOR_PROVIDERS = frozenset({"cloudflare", "aihorde", "pollinations", "imagerouter"})
+_GENERATOR_PROVIDERS = frozenset({"cloudflare", "nvidia", "aihorde", "together",
+                                  "pollinations", "imagerouter"})
 
 
 def _prompt_signature(query: str, style: Optional[dict]) -> str:
@@ -445,6 +470,9 @@ def _prov_aihorde(query: str, count: int, style: Optional[dict] = None,
       AIHORDE_STEPS   — passos de sampling (default 12)
       AIHORDE_UPSCALE — "1" liga RealESRGAN_x4plus (opt-in; encarece → 403 no grátis). Default OFF.
       AIHORDE_MODELS  — CSV de modelos (default "stable_diffusion"; ex.: "stable_diffusion,Deliberate")
+      AIHORDE_POLL_TIMEOUT — segundos que o poll espera a geração antes de desistir (default 300;
+                       define perto do bloco de throttle). Subir ajuda em horário de pico da fila
+                       anônima; baixar faz cair mais rápido pro próximo gerador.
     """
     api_key = os.environ.get("AIHORDE_API_KEY", "0000000000")
     prompt = _build_gen_prompt(query, style)
@@ -548,7 +576,8 @@ def _prov_aihorde(query: str, count: int, style: Optional[dict] = None,
     # devolve 429 (Too Many Requests) com frequência, ainda mais quando o controlador One
     # Piece dispara vários pedidos em paralelo. 429 NÃO é fatal: esperamos mais e seguimos
     # no poll (a geração continua viva no servidor). Só desistimos no timeout global.
-    deadline = time.time() + 180
+    # Timeout configurável (AIHORDE_POLL_TIMEOUT, default 300s) — ver bloco de throttle.
+    deadline = time.time() + _AIHORDE_POLL_TIMEOUT
     while time.time() < deadline:
         time.sleep(5)
         try:
@@ -667,9 +696,32 @@ def _prov_cloudflare(query: str, count: int, style: Optional[dict] = None) -> li
     url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", **_HEADERS}
 
+    def _cf_throttle() -> None:
+        # Mesmo padrão do AI Horde: serializa SÓ o momento da submissão (espaçamento mínimo
+        # desde o último POST). Gate COMPARTILHADO com short_factory._fetch_cloudflare.
+        with _CLOUDFLARE_SUBMIT_LOCK:
+            elapsed = time.time() - _CLOUDFLARE_LAST_SUBMIT[0]
+            if elapsed < _CF_MIN_SUBMIT_GAP:
+                time.sleep(_CF_MIN_SUBMIT_GAP - elapsed)
+            _CLOUDFLARE_LAST_SUBMIT[0] = time.time()
+
     try:
+        _cf_throttle()
         resp = requests.post(url, json={"prompt": prompt, "steps": 6},
                              headers=headers, timeout=_GEN_TIMEOUT)
+        # 429 transitório (rajada de submissões paralelas): 1 retry após esperar o gap (ou o
+        # Retry-After da resposta) converte o 429 em sucesso. Se for a COTA DIÁRIA estourada,
+        # o retry também 429a e cai pro próximo gerador — rápido, sem travar.
+        if resp.status_code == 429:
+            try:
+                wait = float(resp.headers.get("Retry-After", "") or _CF_MIN_SUBMIT_GAP)
+            except (TypeError, ValueError):
+                wait = _CF_MIN_SUBMIT_GAP
+            log.warning("[cloudflare] HTTP 429 — aguardando %.1fs e tentando 1x mais.", wait)
+            time.sleep(max(wait, _CF_MIN_SUBMIT_GAP))
+            _cf_throttle()
+            resp = requests.post(url, json={"prompt": prompt, "steps": 6},
+                                 headers=headers, timeout=_GEN_TIMEOUT)
         if resp.status_code != 200:
             log.warning("[cloudflare] HTTP %s: %s", resp.status_code, resp.text[:200])
             return []
@@ -808,6 +860,157 @@ def _prov_imagerouter(query: str, count: int, style: Optional[dict] = None) -> l
 
     log.warning("[imagerouter] Nenhum url nem b64_json na resposta para '%s'", query)
     return []
+
+
+def _prov_nvidia(query: str, count: int, style: Optional[dict] = None,
+                 seed: Optional[int] = None, negative: Optional[str] = None) -> list:
+    """
+    NVIDIA NIM (Stable Diffusion 3.5 Large) — geração de imagens via API hospedada.
+    Requer NVIDIA_API_KEY no .env; sem ela, pula silenciosamente (igual cloudflare/imagerouter).
+    3º gerador da rede anti-preto: entra como fallback rápido quando Cloudflare cai.
+
+    POST https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-5-large
+    Resposta JSON: artifacts[0].base64 → bytes. Guard de tamanho mínimo (< 2000 bytes = lixo).
+    Knobs: NVIDIA_API_KEY (chave). aspect_ratio 9:16 nativo (sai vertical).
+    """
+    api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if not api_key:
+        log.info("[nvidia] NVIDIA_API_KEY não definida — pulando (opcional).")
+        return []
+
+    prompt = _build_gen_prompt(query, style)
+    neg = (negative or "").strip() or "text, watermark, logo, blurry, deformed, low quality, extra limbs"
+    url = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-5-large"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        **_HEADERS,
+    }
+    payload = {
+        "prompt": prompt,
+        "cfg_scale": 5,
+        "aspect_ratio": "9:16",
+        "steps": 30,
+        "negative_prompt": neg,
+    }
+    if seed is not None:
+        payload["seed"] = int(seed)
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=_GEN_TIMEOUT)
+    except Exception as exc:
+        log.warning("[nvidia] Erro de rede: %s", exc)
+        return []
+
+    if resp.status_code != 200:
+        log.warning("[nvidia] HTTP %s para '%s': %s", resp.status_code, query, resp.text[:200])
+        return []
+
+    try:
+        data = resp.json()
+        b64 = (data.get("artifacts") or [{}])[0].get("base64", "")
+        if not b64:
+            log.warning("[nvidia] resposta sem artifacts[0].base64 para '%s'", query)
+            return []
+        import base64
+        img_bytes = base64.b64decode(b64)
+    except Exception as exc:
+        log.warning("[nvidia] Falha ao parsear/decodificar resposta: %s", exc)
+        return []
+
+    if len(img_bytes) < 2000:
+        log.warning("[nvidia] Imagem muito pequena (%d bytes), ignorando", len(img_bytes))
+        return []
+
+    return [ImageResult(
+        url=f"nvidia://sd35/{_sha1(img_bytes)[:12]}",
+        license="ai-generated",
+        attribution="",
+        source_provider="nvidia",
+        source_url="https://build.nvidia.com/stabilityai/stable-diffusion-3-5-large",
+        bytes_data=img_bytes,
+    )]
+
+
+def _prov_together(query: str, count: int, style: Optional[dict] = None) -> list:
+    """
+    Together AI (FLUX.1-schnell-Free) — geração grátis de imagens (tier free, requer chave).
+    Requer TOGETHER_API_KEY no .env; sem ela, pula silenciosamente. 4º gerador da rede
+    anti-preto: entra após o aihorde (fallback grátis quando os demais caem).
+
+    POST https://api.together.xyz/v1/images/generations
+    Resposta JSON: data[i].b64_json → bytes. 768x1344 ≈ 9:16 vertical, steps=4 (schnell).
+    """
+    api_key = os.environ.get("TOGETHER_API_KEY", "").strip()
+    if not api_key:
+        log.info("[together] TOGETHER_API_KEY não definida — pulando (opcional).")
+        return []
+
+    prompt = _build_gen_prompt(query, style)
+    model = os.environ.get("TOGETHER_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell-Free")
+    url = "https://api.together.xyz/v1/images/generations"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        **_HEADERS,
+    }
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "width": 768,
+        "height": 1344,   # ≈ 9:16 vertical
+        "steps": 4,       # FLUX schnell: poucos passos
+        "n": count,
+        "response_format": "b64_json",
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=_GEN_TIMEOUT)
+    except Exception as exc:
+        log.warning("[together] Erro de rede: %s", exc)
+        return []
+
+    if resp.status_code != 200:
+        log.warning("[together] HTTP %s para '%s': %s", resp.status_code, query, resp.text[:200])
+        return []
+
+    try:
+        data = resp.json()
+        items = data.get("data", []) or []
+    except Exception as exc:
+        log.warning("[together] Falha ao parsear resposta: %s", exc)
+        return []
+
+    if not items:
+        log.warning("[together] resposta sem 'data' para '%s'", query)
+        return []
+
+    import base64
+    results = []
+    for item in items:
+        b64 = item.get("b64_json", "")
+        if not b64:
+            continue
+        try:
+            img_bytes = base64.b64decode(b64)
+        except Exception as exc:
+            log.warning("[together] Falha ao decodificar b64_json: %s", exc)
+            continue
+        if len(img_bytes) < 2000:
+            continue
+        results.append(ImageResult(
+            url=f"together://flux/{_sha1(img_bytes)[:12]}",
+            license="ai-generated",
+            attribution="",
+            source_provider="together",
+            source_url="https://api.together.xyz/",
+            bytes_data=img_bytes,
+        ))
+
+    if not results:
+        log.warning("[together] nenhuma imagem válida na resposta para '%s'", query)
+    return results
 
 
 def _prov_fandom_pageimage(title: str, out_dir: Path) -> Optional[Path]:
@@ -1136,7 +1339,9 @@ _PROVIDER_REGISTRY = {
     "openverse": _prov_openverse,
     "internetarchive": _prov_internetarchive,
     "cloudflare": _prov_cloudflare,
+    "nvidia": _prov_nvidia,
     "aihorde": _prov_aihorde,
+    "together": _prov_together,
     "pollinations": _prov_pollinations,
     "imagerouter": _prov_imagerouter,
     "fandom": _prov_fandom,
@@ -1148,12 +1353,17 @@ _PROVIDER_REGISTRY = {
 _LANE_DEFAULTS = {
     "burn": ["wikimedia", "openverse", "internetarchive"],
     # generate: cascata VIVO-PRIMEIRO (medido 2026-06-08), mortos por último como best-effort:
-    #   cloudflare    — ÚNICO gerador vivo (FLUX schnell, token CF, alta qualidade) → 1º
-    #   aihorde       — grátis público (fila anônima lenta, mas vivo) → 2º, sobrevive ao CF cair
-    #   pollinations  — HTTP 402 (morto hoje) → best-effort
-    #   imagerouter   — HTTP 403 "deposit" (morto hoje) → último elo best-effort
-    # Override por env IMG_PROVIDERS_GENERATE (CSV).
-    "generate": ["cloudflare", "aihorde", "pollinations", "imagerouter"],
+    #   cloudflare    — gerador vivo (FLUX schnell, token CF, alta qualidade) → 1º
+    #   nvidia        — NIM SD3.5 (gateado em NVIDIA_API_KEY; skip sem chave) → 2º fallback rápido
+    #   aihorde       — grátis público (fila anônima lenta, mas vivo) → sobrevive ao CF/NVIDIA cair
+    #   together      — FLUX schnell free (gateado em TOGETHER_API_KEY; skip sem chave) → após aihorde
+    #   pollinations  — HTTP 402 paywall x402 (morto) → FORA da cascata viva
+    #   imagerouter   — HTTP 400/403 "deposit" (morto) → FORA da cascata viva
+    # nvidia/together pulam sozinhos sem chave → a cascata grátis (cloudflare→aihorde→...) segue
+    # idêntica pra quem não configurou as chaves novas. Override por env IMG_PROVIDERS_GENERATE.
+    # pollinations/imagerouter saíram (retry 4x desperdiçava ~1min/cena); _prov_* seguem no
+    # registry → reativáveis listando-os em IMG_PROVIDERS_GENERATE se reviverem.
+    "generate": ["cloudflare", "nvidia", "aihorde", "together"],
     "anime": [],   # só ativado via ALLOW_ANIME=1
     "ref": ["wikimedia", "internetarchive"],
 }
