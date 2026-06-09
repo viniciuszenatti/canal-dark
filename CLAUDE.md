@@ -87,10 +87,10 @@ próprios. Não é mais "escolher 1" nem gargalo. Cada um tem base completa em `
 - n8n: workflow "Canal Dark — MVP Shorts Narrados" **importado** no n8n de HML da S4S (id `dz3ehGcD3srs7vtQ`,
   **inativo**). ⚠️ RESTRIÇÃO DURA nesse n8n: **só ADICIONAR, nunca alterar/excluir nada existente.** Não roda
   lá ainda (sem Python/FFmpeg/chaves no servidor).
-- Servidor 24/7: **RETRY RODANDO** (religado 31/05 03:24). `infra/oci_retry_launch.py` em loop detached,
-  saída em `~/.oci/oci_retry.log`. Oracle SP (1 AD) segue "out of capacity"; avisa no Telegram quando pegar vaga
-  e grava `~/.oci/canal_dark_vm.txt`. **Corte:** se não subir até ~01–02/06, ir pra Hetzner (~R$25/mês). Local
-  segue como base de trabalho enquanto isso.
+- Servidor 24/7: **rota Oracle ENCERRADA** — o auto-retry (`infra/oci_retry_launch.py`) foi **morto de vez em
+  08/06** (processo parado, sem agendamento/startup religando); a Oracle free seguiu "out of capacity". Servidor
+  24/7 = **Hetzner contratado** (VPS compartilhado/em produção, regra **ADD-ONLY**: só adicionar stack isolada,
+  nunca tocar no que existe). Detalhes em `canais/06-infra-n8n-servidor.md`. Local segue como base de trabalho.
 
 ### Próximas tarefas
 - [x] ~~Definir o nicho~~ → DECIDIDO 31/05: 3 canais em paralelo (true-crimes / conspiracy / one-piece).

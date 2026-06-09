@@ -1,7 +1,7 @@
 ---
 projeto: canal-dark
 tipo: command-center
-atualizado: 2026-05-30
+atualizado: 2026-06-08
 ---
 
 # 🛰️ Centro de Comando — Canal Dark
@@ -49,7 +49,7 @@ Todo artefato do Canal Dark vive em **3 lugares** e os 3 ficam em dia:
   (subprocess síncrono no loop) → precisa virar async antes de status/botões. → canal **03**.
 - **n8n MVP 2.0**: importado e inativo, em modo simulação. → canal **06**.
 - **Nicho**: DECIDIDO 31/05 — 3 canais em paralelo (true-crime / conspiracy / one-piece). → canal **04**.
-- **Servidor 24/7**: Oracle pausado (out of capacity); rodando **local** por enquanto. → canal **06**.
+- **Servidor 24/7**: rota Oracle **ENCERRADA** (out of capacity; auto-retry morto 08/06); servidor = **Hetzner** contratado. Local segue como base de trabalho. → canal **06**.
 - **Roteiro de teste**: `roteiros/suzane.json` (true-crime, caso real — exemplo do trade-off de copyright).
 
 ## Risco #1 (sempre na mesa)
